@@ -251,7 +251,7 @@ class ConfigModel(BaseModel):
                         cls._add_flat_key_value_to_nested_dict(cli_config, original_full_name, value, sep)
                         loaded_cli_params_log.append(key_name)
                     except ValueError:
-                        logging.warning(f"🔧 CLI-Argument '{key_name}' mit Wert '{value_str}' konnte nicht in Typ '{metadata_obj.type}' konvertiert werden. Übersprungen.")
+                        logging.warning(f"🔧 cli-argument '{key_name}' with value '{value_str}' could not converted to '{metadata_obj.type}', skipped.")
                 else:
                     # Dies ist ein Flag, das nicht in unserer registrierten Liste ist
                     unknown_args.append(arg)            
@@ -278,9 +278,9 @@ class ConfigModel(BaseModel):
                             loaded_cli_params_log.append(key_name)
                             i += 1 # Den nächsten Arg (Wert) überspringen, da er konsumiert wurde
                         except ValueError:
-                            logging.warning(f"🔧 CLI-Argument '{key_name}' mit Wert '{value_str}' konnte nicht in Typ '{metadata_obj.type}' konvertiert werden. Übersprungen.")
+                            logging.warning(f"🔧 cli-argument '{key_name}' with value '{value_str}' could not converted to '{metadata_obj.type}', skipped.")
                     else:
-                        logging.warning(f"🔧 CLI-Argument '{key_name}' erwartet einen Wert, aber keiner gefunden oder nächstes Argument ist ein Flag. Übersprungen.")
+                        logging.warning(f"🔧 cli-argument '{key_name}' has no value, skipped.")
                 else:
                     unknown_args.append(arg) # Unbekanntes Flag
             else:
@@ -288,9 +288,7 @@ class ConfigModel(BaseModel):
                 unknown_args.append(arg)
             
             i += 1 # Zum nächsten cli-Argument springen
-        if unknown_args:
-            logging.debug(f"🔧 unknown cli-params: [{', '.join(unknown_args)}], skipped")
-        logging.debug(f"🔧 data loaded from cli (prefix='{prefix}'): [{', '.join(loaded_cli_params_log)}]")
+        logging.debug(f"🔧 data loaded from cli-arguments (prefix='{prefix}'): [{', '.join(loaded_cli_params_log)}], ignored unknown [{', '.join(unknown_args)}]")
         return cli_config
 
 
@@ -394,7 +392,7 @@ class ConfigModel(BaseModel):
             if readonly:
                 cls._set_frozen(cls)
 
-            logging.info(f"🔧 {pydantic_model.__name__}(ConfigModel) loaded as a {'read-only' if readonly else 'writeable'} configuration")
+            logging.info(f"🔧 {pydantic_model.__name__}(ConfigModel) loaded as {'readonly' if readonly else 'writeable'}")
             return loaded_configmodel
         except ValidationError as e:
             err_str = []
