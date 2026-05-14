@@ -1,54 +1,113 @@
 """
-Type-Save Configuration for python.
+# TypeSaveConfig
+
+A lightweight, type-safe configuration management library powered by Pydantic v2.
+It centralizes application settings by merging data from multiple sources with a
+defined priority (Environment > CLI > JSON > TOML > Defaults).
+
+## Key Features:
+- **Automatic Merging**: Priority-based merging of various config sources.
+- **Deep Nesting**: Supports nested Pydantic models using `__` as a separator.
+- **Type Safety**: Full validation of types, including lists and Enums.
+- **Optional Dependencies**: Enhanced output via `rich`, `.env` support via `python-dotenv`,
+  and TOML exporting via `tomli-w`.
+- **Immutability**: Config can be optionally 'frozen' (readonly) after loading.
+
+## Usage Example:
+    class MyConfig(ConfigModel):
+        db_url: str = "localhost"
+        debug: bool = False
+
+    # Load from all sources with default prefix 'TSC_'
+    cfg = MyConfig.load(toml_files=["config.toml"])
+
+    # Access values
+    print(cfg.db_url)
+
+## CLI & Env Syntax:
+- **Environment**: `export TSC_DB_URL="postgres://..."`
+- **CLI**: `python script.py --tsc_db_url="postgres://..."`
+- **Lists (CLI)**: `--tsc_tags='["a", "b"]'` (Uses JSON-style parsing)
 """
-from typing import TypeVar, Type, get_args, Any
-from enum import Enum
+
+import json
+import logging
 import os
 import sys
-from pathlib import Path
-import json
 import tomllib
-import re
-import logging
+from enum import Enum
+from pathlib import Path
+from typing import Any, Type, TypeVar, Union, get_args, Optional
+
 from pydantic import BaseModel, ValidationError
 
-
 # Initialize logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
-use_lib_rich: bool = True
-try:
-    from rich.console import Console    # type: ignore
-    from rich.pretty import Pretty      # type: ignore
-except ImportError:
-    use_lib_rich = False
+class _LibWrapper:
+    """
+    Internal abstraction for optional third-party libraries.
+    Ensures the library remains functional even if 'rich', 'python-dotenv',
+    or 'tomli-w' are not installed.
+    """
+    def __init__(self):
+        self.rich, self.has_rich = self._import("rich")
+        self.dotenv, self.has_dotenv = self._import("dotenv")
+        self.tomli_w, self.has_tomliw = self._import("tomli_w")
 
-use_lib_dotenv: bool = True
-try:
-    from dotenv import load_dotenv      # type: ignore
-except ImportError:
-    use_lib_dotenv = False
+        installed = []
+        if self.has_rich:
+            installed.append("rich")
+        if self.has_dotenv:
+            installed.append("python-dotenv")
+        if self.has_tomliw:
+            installed.append("tomli-w")
 
-use_lib_tomliw: bool = True
-try:
-    import tomli_w
-except ImportError:
-    use_lib_tomliw: bool = False
+        status_str = ", ".join(installed) if installed else "none"
+        logging.debug("🔧 [TypeSaveConfig] Extra libraries installed: %s", status_str)
 
+    @staticmethod
+    def _import(name: str):
+        try:
+            return __import__(name), True
+        except ImportError:
+            return None, False
 
-class ExportFormat (Enum):
-    """Format for Export"""
+    def load_dotenv(self) -> None:
+        """load data via lib dotenv"""
+        if self.has_dotenv and self.dotenv is not None:
+            self.dotenv.load_dotenv()
+
+    def print_rich(self, obj: Any) -> bool:
+        """print data to console via lib rich"""
+        if self.has_rich and self.rich is not None:
+            from rich.console import Console
+            from rich.pretty import Pretty
+            console = Console()
+            console.print(Pretty(obj, indent_guides=True, indent_size=2))
+            return True
+        return False
+
+    def toml_dumps(self, data: dict) -> Optional[str]:
+        """print data in toml format"""
+        if self.has_tomliw and self.tomli_w is not None:
+            return self.tomli_w.dumps(data)
+        return None
+
+_libs = _LibWrapper()
+
+class ExportFormat(Enum):
+    """Formats available for exporting the configuration."""
     JSON = 0
     TOML = 1
 
-
-# Define a TypeVar for the Pydantic model itself
 ConfigModelT = TypeVar('ConfigModelT', bound='ConfigModel')
 
 class ConfigAttrMetadata(BaseModel):
-    """
-    Attribute Metadata
-    """
+    """Holds metadata about a config field for help-text and documentation generation."""
     model: str
     name: str
     fullname: str
@@ -57,106 +116,72 @@ class ConfigAttrMetadata(BaseModel):
     description: str = ''
     default: Any = None
 
-
 class ConfigModel(BaseModel):
     """
-    Type-Safe Configuration for your python-projects
-
-    Your specific application configurations should inherit from this 'ConfigModel' class.
-    The ConfigModel itself is simply a Pydantic model. Therefore your configuration-definition is a pydantic BaseModel.
-    Pydantic will do all the hard stuff (python type-hints, validating data, when assigning to a field,...).
-
-    ConfigModel loads data from different sources and merge them together, in that order:
-      source-code, toml-file(s), json-file(s), cli-parameter, env-vars
-    So, a config-fields defined in a toml-file can be overwritten by the cli-params and the env-vars.
-
-    Basic Usage:
-    ```
-    # main.py #
-    from pydantic import BaseModel, Field
-    from typesave_config import ConfigModel
-
-    class MyAppConfig(ConfigModel):
-        username: str = Field(..., description="The username to log in")  # load (secret) field vie cli-interface
-        password: str
-        url: str = Field("https://example.com/", description="Optional: the url to log in")
-        verbose: bool = True
-
-    conf = MyAppConfig.load(toml_files=['myconf.toml'])
-    if conf.verbose:
-        print(f"login user {conf.username} at {conf.url}")
-    ```
-
-    You can can load any missing (or secret) configuration-data before runtime, by using the
-    cli-interface (env-vars and/or cli-arguments)
-
-    $ TSC_USERNAME="root" python main.py --tsc_password="123"
+    The core configuration class. Inherit from this to define your config schema.
+    Provides logic for loading, merging, and validating configuration data.
     """
 
     @classmethod
-    def _get_attr_metadata(cls, model:Type[BaseModel], _indent: int = 0, _path: str = "") -> list[ConfigAttrMetadata]:
-        field_seperator = "__"
+    def _get_attr_metadata(cls, model: Type[BaseModel], _path: str = "") -> list[ConfigAttrMetadata]:
+        field_separator = "__"
         f = []
         for name, info in sorted(model.model_fields.items()):
-            f_model = model.__name__
-            f_name = str(name)
-            f_rawtype = info.annotation
-            f_type = info.annotation
-            f_description = str(info.description) + " " + str(f_type)
-            f_fullname = f"{_path}{field_seperator}{f_name}" if _path else f_name      # full-path outflatted (pompts.name ==> prompts__name)
-            f_default = info.default if info.default is not None else None
+            f_fullname = f"{_path}{field_separator}{name}" if _path else name
+            raw_annotation = info.annotation
 
-            # Extract the type name as a string
-            if hasattr(f_type, '__name__'):
-                type_name = f_type.__name__ # type: ignore
-            elif hasattr(f_type, '__origin__') and f_type.__origin__ is list:  # type: ignore
-                list_args = get_args(f_type)
-                if list_args:
-                    list_type = list_args[0]
-                    type_name = f"list[{list_type.__name__}]" if hasattr(list_type, '__name__') else f"list[{str(list_type)}]"
-                else:
-                    type_name = "list"
+            origin = getattr(raw_annotation, "__origin__", None)
+            args = get_args(raw_annotation)
+
+            target_type = raw_annotation
+            if origin is Union:
+                filtered_args = [a for a in args if a is not None and not isinstance(None, a)]
+                if filtered_args:
+                    target_type = filtered_args[0]
+
+            if target_type is not None and hasattr(target_type, "__name__"):
+                type_name = target_type.__name__
+            elif origin is list:
+                inner_args = get_args(target_type)
+                inner_name = inner_args[0].__name__ if inner_args and hasattr(inner_args[0], "__name__") else "Any"
+                type_name = f"list[{inner_name}]"
             else:
-                type_name = str(f_type).replace("<class '", "").replace("'>", "")
+                type_name = str(target_type).replace("<class '", "").replace("'>", "")
 
-            f.append(ConfigAttrMetadata(model=f_model,
-                                        name=f_name, fullname=f_fullname,
-                                        raw_type=f_rawtype, type=type_name,
-                                        description=f_description,
-                                        default=f_default))
-            # If the field type is a Pydantic model, recursively process it
-            if hasattr(f_type, 'model_fields'):
-                f += cls._get_attr_metadata(f_type, _indent + 1, f_fullname) # type: ignore
-            # Handle List[PydanticModel]
-            if hasattr(f_type, '__origin__') and f_type.__origin__ is list and get_args(f_type):  # type: ignore
-                list_type = get_args(f_type)[0]
-                if hasattr(list_type, 'model_fields') and list_type != model:
-                    f += cls._get_attr_metadata(list_type, _indent + 1, f_fullname)
+            description = f"{info.description or ''} {type_name}".strip()
+
+            f.append(ConfigAttrMetadata(
+                model=model.__name__,
+                name=name,
+                fullname=f_fullname,
+                raw_type=raw_annotation,
+                type=type_name,
+                description=description,
+                default=info.default if info.default is not None else None
+            ))
+
+            if isinstance(target_type, type) and issubclass(target_type, BaseModel):
+                f += cls._get_attr_metadata(target_type, f_fullname)
+            elif origin is list and args:
+                list_item_type = args[0]
+                if isinstance(list_item_type, type) and issubclass(list_item_type, BaseModel):
+                    f += cls._get_attr_metadata(list_item_type, f_fullname)
         return f
 
-
     @classmethod
-    def _add_flat_key_value_to_nested_dict(cls, target_dict: dict, full_name: str, value: Any, field_seperator: str):
-        """
-        Reconstructs a nested dictionary structure from a flat key (e.g., "prompts__name") and a value.
-        Updates the target_dict in place.
-        """
-        parts = full_name.split(field_seperator)
+    def _add_flat_key_value_to_nested_dict(cls, target_dict: dict, full_name: str, value: Any, field_separator: str):
+        parts = full_name.split(field_separator)
         current_level = target_dict
         for i, part in enumerate(parts):
             if i == len(parts) - 1:
-                # Last part is the actual key for the value
                 current_level[part] = value
             else:
-                # Nested part, ensure it's a dictionary
                 if part not in current_level or not isinstance(current_level[part], dict):
                     current_level[part] = {}
                 current_level = current_level[part]
 
-
     @classmethod
-    def _deep_merge(cls, dict1, dict2):
-        """Deepply merges two dicts together"""
+    def _deep_merge(cls, dict1: dict, dict2: dict) -> dict:
         for key, value in dict2.items():
             if key in dict1 and isinstance(dict1[key], dict) and isinstance(value, dict):
                 dict1[key] = cls._deep_merge(dict1[key], value)
@@ -164,277 +189,198 @@ class ConfigModel(BaseModel):
                 dict1[key] = value
         return dict1
 
+    @classmethod
+    def _set_frozen2(cls, model: Type[BaseModel]) -> None:
+        model.model_config["frozen"] = True
+        for info in model.model_fields.values():
+            annotation = info.annotation
+            origin = getattr(annotation, "__origin__", None)
+            args = get_args(annotation)
+            target = annotation
+            if origin is Union:
+                filtered = [a for a in args if a is not None and not isinstance(None, a)]
+                if filtered:
+                    target = filtered[0]
+
+            if isinstance(target, type) and issubclass(target, BaseModel):
+                cls._set_frozen2(target)
+            elif origin is list and args:
+                list_item_type = args[0]
+                if isinstance(list_item_type, type) and issubclass(list_item_type, BaseModel):
+                    cls._set_frozen2(list_item_type)
+        model.model_rebuild(force=True)
+        logging.debug("🔧 [TypeSaveConfig] Applied frozen state to: %s", model.__name__)
 
     @classmethod
-    def _set_frozen(cls, model:Type[BaseModel]) -> None:
-        """
-        Sets the "frozen-mode" recursivly foreach pydantic ConfigModel/BaseModel or list of BaseModels
-        This provents overwriting the configuration after loading the data. Instead it raises a pydantic_core.ValidationError
-        """
-        for _name, info in sorted(model.model_fields.items()):
-            f_type = info.annotation
-            # handle pydantic-model
-            if hasattr(f_type, 'model_fields'):
-                cls._set_frozen(f_type) # type: ignore
-            # handle List[PydanticModel]
-            if hasattr(f_type, '__origin__') and f_type.__origin__ is list and get_args(f_type):  # type: ignore
-                list_type = get_args(f_type)[0]
-                if hasattr(list_type, 'model_fields') and list_type != model:
-                    cls._set_frozen(list_type)
-
-        logging.debug("🔧 [TypeSaveConfig] set %s to frozen/read-only", model.__name__)
-        model.model_config = {"frozen": True} # set this BaseModel to readonly/frozen
-
-
-
-    @classmethod
-    def _load_toml(cls, filenames:list[str]) -> dict:
+    def _load_toml(cls, filenames: list[str]) -> dict:
         toml_config = {}
         for toml_file in filenames:
-            toml_file_path = Path(toml_file)
-            if toml_file_path.exists():
-                try:
-                    with open(toml_file_path, "rb") as f:
-                        toml_config = tomllib.load(f)
-                    logging.debug("🔧 [TypeSaveConfig] data loaded from toml: %s", toml_file_path)
-
-                except (FileNotFoundError, tomllib.TOMLDecodeError) as e:
-                    logging.debug("🔧 [TypeSaveConfig] failed Loading data from toml-file %s , skipped %s", toml_file_path, e)
-            else:
-                logging.debug("🔧 [TypeSaveConfig] toml-file '%s' not found, skipped", toml_file_path)
+            path = Path(toml_file)
+            if not path.exists():
+                logging.warning("⚠️ [TypeSaveConfig] TOML file not found: %s", path)
+                continue
+            try:
+                with open(path, "rb") as f:
+                    new_data = tomllib.load(f)
+                    toml_config = cls._deep_merge(toml_config, new_data)
+                    logging.debug("🔧 [TypeSaveConfig] Merged TOML: %s", path)
+            except tomllib.TOMLDecodeError as e:
+                logging.warning("❌ [TypeSaveConfig] Failed to parse TOML %s: %s", path, e)
         return toml_config
 
     @classmethod
-    def _load_json(cls, filenames:list[str]) -> dict:
+    def _load_json(cls, filenames: list[str]) -> dict:
         json_config = {}
         for json_file in filenames:
-            json_file_path = Path(json_file)
-            if json_file_path.exists():
-                try:
-                    with open(json_file_path, "r", encoding="utf-8") as f:  # Open in text mode ("r") for JSON
-                        json_config = json.load(f)
-                    logging.debug("🔧 [TypeSaveConfig] data loaded from json: %s", json_file_path)
-
-                except (FileNotFoundError, json.JSONDecodeError) as e:
-                    logging.debug("🔧 [TypeSaveConfig] failed Loading data from json: %s, skipped %s", json_file_path, e)
-            else:
-                logging.debug("🔧 [TypeSaveConfig] json-file '%s' not found, skipped", json_file_path)
+            path = Path(json_file)
+            if not path.exists():
+                logging.warning("⚠️ [TypeSaveConfig] JSON file not found: %s", path)
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    new_data = json.load(f)
+                    json_config = cls._deep_merge(json_config, new_data)
+                    logging.debug("🔧 [TypeSaveConfig] Merged JSON: %s", path)
+            except json.JSONDecodeError as e:
+                logging.warning("❌ [TypeSaveConfig] Failed to parse JSON %s: %s", path, e)
         return json_config
 
-
     @classmethod
-    def _load_cli(cls, prefix: str, sep: str) -> dict:
-        """Loads configuration from CLI arguments using a manual parser. 
-        This approach avoids argparse's ambiguous option matching (argprase 
-        meckert bei: tsc_user & tsc_user__uersnem, tsc_user__password). ?!)"""
+    def _load_cli_json_style(cls, prefix: str, sep: str) -> dict:
         cli_config = {}
         prefix_lower = prefix.lower()
+        metadata_map = {m.fullname: m for m in cls.get_metadata()}
+        found_keys = []
 
-        # Ein Mapping von vollständigen CLI-Flag-Namen zu ihren Metadaten. Beispiel: {"--tsc_user__username": ConfigAttrMetadata(...)}
-        registered_cli_flags_map: dict[str, ConfigAttrMetadata] = {}
-        for m in cls.get_metadata():
-            # Nur für Typen, die wir manuell parsen wollen (str, int, float, bool)
-            if m.type in ['str', 'int', 'float', 'bool']:
-                full_cli_flag_name = "--" + prefix_lower + m.fullname
-                registered_cli_flags_map[full_cli_flag_name] = m
-
-        # sys.argv enthält das Skript selbst an Position 0. Wir wollen nur die Argumente danach.
-        args_to_parse = sys.argv[1:]
-
-        i = 0
-        loaded_cli_params_log: list[str] = []
-        unknown_args: list[str] = []
-
-        while i < len(args_to_parse):
-            arg = args_to_parse[i]
-            ## Muster 1: --key=value
-            match_equal = re.match(r'^(--[^=]+)=(.+)$', arg)
-            if match_equal:
-                key_name = match_equal.group(1) # z.B. --tsc_user__username
-                value_str = match_equal.group(2)
-
-                if key_name in registered_cli_flags_map:
-                    metadata_obj = registered_cli_flags_map[key_name]
-                    try:
-                        # Manuelle Typumwandlung basierend auf dem Metadaten-Typ
-                        value: Any
-                        if metadata_obj.type == 'int':
-                            value = int(value_str)
-                        elif metadata_obj.type == 'float':
-                            value = float(value_str)
-                        elif metadata_obj.type == 'bool':
-                            # Konvertierung von String zu Bool
-                            value = value_str.lower() in ['true', '1', 'yes']
-                        else: # 'str' oder jeder andere Fallback
-                            value = value_str
-                        # Rekonstruiere den originalen vollen Namen ohne Präfix
-                        original_full_name = key_name[len(prefix_lower) + 2:] # +2 für "--"
-                        cls._add_flat_key_value_to_nested_dict(cli_config, original_full_name, value, sep)
-                        loaded_cli_params_log.append(key_name)
-                    except ValueError:
-                        log_msg = f"🔧 [TypeSaveConfig] cli-argument '{key_name}' with value '{value_str}' could not converted to '{metadata_obj.type}', skipped."
-                        logging.warning(log_msg)
-                else:
-                    # Dies ist ein Flag, das nicht in unserer registrierten Liste ist
-                    unknown_args.append(arg)
-            ## Muster 2: --key value
-            elif arg.startswith('--'):
-                key_name = arg # z.B. --tsc_version
-                if key_name in registered_cli_flags_map:
-                    # Prüfen, ob der nächste Wert existiert und kein weiteres Flag ist
-                    if i + 1 < len(args_to_parse) and not args_to_parse[i+1].startswith('--'):
-                        value_str = args_to_parse[i+1]
-                        metadata_obj = registered_cli_flags_map[key_name]
+        for arg in sys.argv[1:]:
+            if arg.startswith("--") and "=" in arg:
+                key_part, val_str = arg.split("=", 1)
+                clean_key = key_part.lstrip("-")
+                if clean_key.startswith(prefix_lower):
+                    config_path = clean_key[len(prefix_lower):].lstrip("_")
+                    if config_path in metadata_map:
                         try:
-                            value: Any
-                            if metadata_obj.type == 'int':
-                                value = int(value_str)
-                            elif metadata_obj.type == 'float':
-                                value = float(value_str)
-                            elif metadata_obj.type == 'bool':
-                                value = value_str.lower() in ['true', '1', 'yes']
-                            else: # 'str'
-                                value = value_str
-                            original_full_name = key_name[len(prefix_lower) + 2:]
-                            cls._add_flat_key_value_to_nested_dict(cli_config, original_full_name, value, sep)
-                            loaded_cli_params_log.append(key_name)
-                            i += 1 # Den nächsten Arg (Wert) überspringen, da er konsumiert wurde
-                        except ValueError:
-                            log_msg = f"🔧 [TypeSaveConfig] cli-argument '{key_name}' with value '{value_str}' could not converted to '{metadata_obj.type}', skipped."
-                            logging.warning(log_msg)
-                    else:
-                        log_msg = f"🔧[TypeSaveConfig] cli-argument '{key_name}' has no value, skipped."
-                        logging.warning(log_msg)
-                else:
-                    unknown_args.append(arg) # Unbekanntes Flag
-            else:
-                # Alles andere, was kein '--' am Anfang hat, als unbekannt behandeln
-                unknown_args.append(arg)
+                            parsed_val = json.loads(val_str)
+                        except (json.JSONDecodeError, TypeError):
+                            parsed_val = val_str
+                        cls._add_flat_key_value_to_nested_dict(cli_config, config_path, parsed_val, sep)
+                        found_keys.append(clean_key)
 
-            i += 1 # Zum nächsten cli-Argument springen
-        log_msg = f"🔧 [TypeSaveConfig] data loaded from cli-arguments (prefix='{prefix}'): [{', '.join(loaded_cli_params_log)}], ignored unknown [{', '.join(unknown_args)}]"
-        logging.debug(log_msg)
+        if found_keys:
+            logging.debug("🔧 [TypeSaveConfig] CLI keys loaded: %s", ", ".join(found_keys))
+        else:
+            logging.debug("ℹ️ [TypeSaveConfig] No matching CLI found (Prefix: --%s)", prefix_lower)
         return cli_config
-
 
     @classmethod
     def _load_env(cls, prefix: str, sep: str) -> dict:
         env_config = {}
-        prefix = prefix.upper()
-        loaded_env_vars = []
+        prefix_upper = prefix.upper()
+        _libs.load_dotenv()
+        found_keys = []
 
-        if use_lib_dotenv:
-            load_dotenv()
-
-        # check every possible env-var. only accept base-types (str, int,..) to be set in cli/env
         for m in cls.get_metadata():
-            env_name = prefix + m.fullname.upper()
+            env_name = prefix_upper + m.fullname.upper()
             env_value = os.getenv(env_name)
-            if env_value is not None:  # skip unset env-var
-                if m.type in ['str', 'int', 'float', 'bool']: # skip lists and dicts
-                    loaded_env_vars.append(env_name)
-                    cls._add_flat_key_value_to_nested_dict(env_config, m.fullname, env_value, sep)
-        logging.debug("🔧 [TypeSaveConfig] data loaded from env (prefix='%s'): [%s]", prefix, ', '.join(loaded_env_vars))
+            if env_value is not None:
+                cls._add_flat_key_value_to_nested_dict(env_config, m.fullname, env_value, sep)
+                found_keys.append(env_name)
+
+        if found_keys:
+            logging.debug("🔧 [TypeSaveConfig] ENV keys loaded: %s", ", ".join(found_keys))
+        else:
+            logging.debug("ℹ️ [TypeSaveConfig] No matching ENV found (Prefix: %s)", prefix_upper)
         return env_config
 
+    @classmethod
+    def _format_errors(cls, e: ValidationError, prefix: str, sep: str) -> str:
+        error_messages = []
+        for error in e.errors():
+            loc_path = sep.join(map(str, error["loc"]))
+            env_name = f"{prefix.upper()}{loc_path.upper()}"
+            cli_flag = f"--{prefix.lower()}{loc_path.lower()}=value"
+            msg = (
+                f"\n❌ Field: '{loc_path}'"
+                f"\n   Issue: {error['msg']} ({error['type']})"
+                f"\n   How to fix: Env: export {env_name}=<value> | CLI: {cli_flag}"
+            )
+            error_messages.append(msg)
+        return "".join(error_messages)
 
     def print_config(self) -> None:
-        """
-        Prints the configuration instance to stdout (all nested keys and values). Uses Lib Rich if available; fallback to json
-        """
-        if use_lib_rich:
-            Console().print(Pretty(self, indent_guides=True, indent_size=2))
-        else:
-            print("-"*10, self.__class__.__name__, "-"*10)
+        """Pretty-prints the current configuration. Uses 'rich' if available."""
+        if not _libs.print_rich(self):
+            print("-" * 10, self.__class__.__name__, "-" * 10)
             print(self.model_dump_json(indent=2))
-            print("-"*50 , "\n")
 
-
-
-    def export(self, frmt:ExportFormat) -> str:
-        """Returns a 'toml' or 'json' string from current data. defaults to 'json'"""
+    def export(self, frmt: ExportFormat) -> str:
+        """Exports the configuration as a TOML or JSON string."""
         if frmt == ExportFormat.TOML:
-            if use_lib_tomliw:
-                return tomli_w.dumps(self.model_dump())
-            logging.warning("[TypeSaveConfig] python package 'tomli_w' not installed, fallback to JSON format. Install tomli_w to generate TOML data...")
-
+            res = _libs.toml_dumps(self.model_dump())
+            if res:
+                return res
+            logging.warning("🔧 [TypeSaveConfig] tomli-w not installed, fallback to JSON.")
         return self.model_dump_json(indent=2)
 
-
     @classmethod
-    def print_help(cls):
-        """
-        Prints out help (i.e. all fields and their description)
-        """
-        m = cls.get_metadata()
-        for a in m:
-            s = f"{a.name} / {a.fullname}\n"
-            s += f"{a.description}\ntype={a.type} | default={a.default}"
-            print(s)
-
+    def print_help(cls) -> None:
+        """Prints help documentation for all available config fields."""
+        for a in cls.get_metadata():
+            print(f"{a.name} / {a.fullname}")
+            print(f"{a.description}")
+            print(f"type={a.type} | default={a.default}")
 
     @classmethod
     def get_metadata(cls) -> list[ConfigAttrMetadata]:
-        """
-        Returns a flat List of all/nested defined config fields.
-        """
+        """Returns a list of metadata for every field in the config model."""
         return cls._get_attr_metadata(cls)
 
-
     @classmethod
-    def load(cls: Type[ConfigModelT],
-            toml_files: list[str] | None = None,
-            json_files: list[str] | None = None,
-            load_env: bool = True,
-            load_cli: bool = True,
-            data: dict | None = None,
-            readonly: bool = True,
-            prefix:str = "TSC_",
-        ) -> ConfigModelT|None:
+    def load(cls: Type[ConfigModelT], toml_files: Optional[list[str]] = None,
+             json_files: Optional[list[str]] = None, load_env: bool = True,
+             load_cli: bool = True, data: Optional[dict[Any, Any]] = None,
+             readonly: bool = True, prefix: str = "TSC_") -> Optional[ConfigModelT]:
         """
-        Load and merges configurations settings from different sources, in that order:
-            source-code , toml-file, json-file, cli-parameter, env-vars.
+        Loads the configuration from various sources.
 
-        Returns:
-            ConfigModel: A new configuration instance, preloaded and validated by pydantic. Or None, if validation had errors.
-
-        Parameters:
-            toml_files: TOML files to load; don't use TOML if list is empty.
-            json_files: JSON files to load; don't use JSON if list is empty.
-            load_env:   If True, use the enviroment-variables.
-            load_cli:   If True, use the cli-arguments.
-            data:       Load data directly from a python dict within the source-code.
-            readonly:   Returned configuraion is read-only/frozen, if True.
-            prefix: Prefix for env-vars and cli-args. Hint: don't use an empty prefix for env-vars.
+        Args:
+            toml_files: List of TOML file paths to load.
+            json_files: List of JSON file paths to load.
+            load_env: Whether to load from Environment Variables.
+            load_cli: Whether to load from CLI arguments.
+            data: Initial dictionary of values (lowest priority).
+            readonly: If True, the resulting config object is immutable.
+            prefix: Prefix for CLI flags and Environment variables.
         """
-        field_seperator:str = "__"
-        pydantic_model:Type[ConfigModelT] = cls
+        field_separator = "__"
+        merged: dict[Any, Any] = data if data is not None else {}
 
-        toml_config = cls._load_toml(toml_files) if toml_files else {}
-        json_config = cls._load_json(json_files) if json_files else {}
-        cli_config = cls._load_cli(prefix,field_seperator) if load_cli else {}
-        env_config = cls._load_env(prefix,field_seperator) if load_env else {}
+        toml_list = toml_files if toml_files is not None else []
+        json_list = json_files if json_files is not None else []
+
+        merged = cls._deep_merge(merged, cls._load_toml(toml_list))
+        merged = cls._deep_merge(merged, cls._load_json(json_list))
+
+        if load_cli:
+            merged = cls._deep_merge(merged, cls._load_cli_json_style(prefix, field_separator))
+        if load_env:
+            merged = cls._deep_merge(merged, cls._load_env(prefix, field_separator))
 
         try:
-            merged_config = {}
-            #merged_config = {**data, **toml_config, **json_config, **cli_config, **env_config}
-            merged_config = cls._deep_merge(merged_config, data)
-            merged_config = cls._deep_merge(merged_config, toml_config)
-            merged_config = cls._deep_merge(merged_config, json_config)
-            merged_config = cls._deep_merge(merged_config, cli_config)
-            merged_config = cls._deep_merge(merged_config, env_config)
-
-            loaded_configmodel = pydantic_model(**merged_config)
+            instance = cls(**merged)
             if readonly:
-                cls._set_frozen(cls)
-
-            log_msg = f"🔧 [TypeSaveConfig] '{pydantic_model.__name__}' loaded as {'readonly' if readonly else 'writeable'}"
-            logging.info(log_msg)
-            return loaded_configmodel
+                cls._set_frozen2(cls)
+            logging.info("🔧 [TypeSaveConfig] '%s' loaded (readonly=%s)", cls.__name__, readonly)
+            return instance
         except ValidationError as e:
-            err_str = []
-            for ve in e.errors():
-                err_str.append(f"field '{str(ve["loc"][0])}' {str(ve['type']).capitalize()},{str(ve["msg"])}")
-            log_msg = f"🔧 [TypeSaveConfig] Loading {pydantic_model.__name__}(ConfigModel) faild with {e.error_count()} error(s): [{"|".join(err_str)}]"
-            logging.warning(log_msg)
-        return None
+            err_msg = cls._format_errors(e, prefix, field_separator)
+            logging.error("🔧 [TypeSaveConfig] Validation failed: %s", err_msg)
+            return None
+
+    @classmethod
+    def _set_frozen(cls, model: Type[BaseModel]) -> None:
+        cls._set_frozen2(model)
+
+    @classmethod
+    def _load_cli(cls, prefix: str, sep: str) -> dict:
+        return cls._load_cli_json_style(prefix, sep)

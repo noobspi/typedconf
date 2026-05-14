@@ -13,7 +13,7 @@ class AppConfig__User(BaseModel):
     username: str = Field('anonym', description="The username.")
     password: str = Field(..., description="The password. required.")
 
-class AppConfig(ConfigModel): 
+class AppConfig(ConfigModel):
     project_name: str = Field(..., description="The name of the Python project.")
     version: str = Field(..., description="The name of the Python project.")
     user: AppConfig__User = Field(..., description="Current logged in user..")
@@ -27,7 +27,7 @@ class AppConfig(ConfigModel):
 
 
 
-conf = AppConfig.load(toml_files=['test_conf.toml', 'a.toml'], 
+conf = AppConfig.load(toml_files=['test_conf.toml', 'a.toml'],
                       json_files=['a.json', 'b.json'],
                       data={'version':'0.1 alpha'},
                       load_cli=True,
@@ -39,7 +39,7 @@ if not conf:
     exit(1)
 
 conf.print_config()
-#print(conf.export(ExportFormat.JSON))
+
 print(conf.export(ExportFormat.TOML))
 
 #console = Console()

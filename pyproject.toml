@@ -5,6 +5,7 @@ description = "Type-Save Configuration for python."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "dotenv>=0.9.9",
     "ipykernel>=6.29.5",
     "pip>=25.1.1",
     "pydantic>=2.11.7",
