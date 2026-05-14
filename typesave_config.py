@@ -1,38 +1,57 @@
-import os
-from pathlib import Path
-import tomllib
-import json
+"""
+Type-Save Configuration for python.
+"""
 from typing import TypeVar, Type, get_args, Any
-from pydantic import BaseModel, ValidationError
+from enum import Enum
+import os
+import sys
+from pathlib import Path
+import json
+import tomllib
+import re
 import logging
+from pydantic import BaseModel, ValidationError
 
-import sys # Für den Zugriff auf Kommandozeilenargumente
-import re # Für das Parsen von Argumenten
 
 # Initialize logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-use_rich: bool = True
+use_lib_rich: bool = True
 try:
     from rich.console import Console    # type: ignore
-    from rich.markdown import Markdown  # type: ignore
     from rich.pretty import Pretty      # type: ignore
-except:
-    use_rich = False
-use_dotenv: bool = True
+except ImportError:
+    use_lib_rich = False
+
+use_lib_dotenv: bool = True
 try:
     from dotenv import load_dotenv      # type: ignore
-except:
-    use_dotenv = False
+except ImportError:
+    use_lib_dotenv = False
+
+use_lib_tomliw: bool = True
+try:
+    import tomli_w
+except ImportError:
+    use_lib_tomliw: bool = False
+
+
+class ExportFormat (Enum):
+    """Format for Export"""
+    JSON = 0
+    TOML = 1
 
 
 # Define a TypeVar for the Pydantic model itself
-TConfigModel = TypeVar('TConfigModel', bound='ConfigModel')
+ConfigModelT = TypeVar('ConfigModelT', bound='ConfigModel')
 
 class ConfigAttrMetadata(BaseModel):
+    """
+    Attribute Metadata
+    """
     model: str
     name: str
-    fullanme: str
+    fullname: str
     type: str
     raw_type: Any
     description: str = ''
@@ -41,17 +60,17 @@ class ConfigAttrMetadata(BaseModel):
 
 class ConfigModel(BaseModel):
     """
-    Super-Easy and Type-Safe Configuration for your python-projects
-    
+    Type-Safe Configuration for your python-projects
+
     Your specific application configurations should inherit from this 'ConfigModel' class.
     The ConfigModel itself is simply a Pydantic model. Therefore your configuration-definition is a pydantic BaseModel.
     Pydantic will do all the hard stuff (python type-hints, validating data, when assigning to a field,...).
-    
+
     ConfigModel loads data from different sources and merge them together, in that order:
       source-code, toml-file(s), json-file(s), cli-parameter, env-vars
     So, a config-fields defined in a toml-file can be overwritten by the cli-params and the env-vars.
-    
-    Basic Usage: 
+
+    Basic Usage:
     ```
     # main.py #
     from pydantic import BaseModel, Field
@@ -62,13 +81,13 @@ class ConfigModel(BaseModel):
         password: str
         url: str = Field("https://example.com/", description="Optional: the url to log in")
         verbose: bool = True
-        
+
     conf = MyAppConfig.load(toml_files=['myconf.toml'])
     if conf.verbose:
         print(f"login user {conf.username} at {conf.url}")
     ```
-    
-    You can can load any missing (or secret) configuration-data before runtime, by using the 
+
+    You can can load any missing (or secret) configuration-data before runtime, by using the
     cli-interface (env-vars and/or cli-arguments)
 
     $ TSC_USERNAME="root" python main.py --tsc_password="123"
@@ -100,10 +119,10 @@ class ConfigModel(BaseModel):
             else:
                 type_name = str(f_type).replace("<class '", "").replace("'>", "")
 
-            f.append(ConfigAttrMetadata(model=f_model, 
-                                        name=f_name, fullanme=f_fullname, 
-                                        raw_type=f_rawtype, type=type_name, 
-                                        description=f_description, 
+            f.append(ConfigAttrMetadata(model=f_model,
+                                        name=f_name, fullname=f_fullname,
+                                        raw_type=f_rawtype, type=type_name,
+                                        description=f_description,
                                         default=f_default))
             # If the field type is a Pydantic model, recursively process it
             if hasattr(f_type, 'model_fields'):
@@ -112,7 +131,7 @@ class ConfigModel(BaseModel):
             if hasattr(f_type, '__origin__') and f_type.__origin__ is list and get_args(f_type):  # type: ignore
                 list_type = get_args(f_type)[0]
                 if hasattr(list_type, 'model_fields') and list_type != model:
-                     f += cls._get_attr_metadata(list_type, _indent + 1, f_fullname)
+                    f += cls._get_attr_metadata(list_type, _indent + 1, f_fullname)
         return f
 
 
@@ -152,7 +171,7 @@ class ConfigModel(BaseModel):
         Sets the "frozen-mode" recursivly foreach pydantic ConfigModel/BaseModel or list of BaseModels
         This provents overwriting the configuration after loading the data. Instead it raises a pydantic_core.ValidationError
         """
-        for name, info in sorted(model.model_fields.items()):
+        for _name, info in sorted(model.model_fields.items()):
             f_type = info.annotation
             # handle pydantic-model
             if hasattr(f_type, 'model_fields'):
@@ -161,13 +180,13 @@ class ConfigModel(BaseModel):
             if hasattr(f_type, '__origin__') and f_type.__origin__ is list and get_args(f_type):  # type: ignore
                 list_type = get_args(f_type)[0]
                 if hasattr(list_type, 'model_fields') and list_type != model:
-                    cls._set_frozen(list_type)   
-        
-        logging.debug(f"🔧 set {model.__name__} to frozen/read-only")
+                    cls._set_frozen(list_type)
+
+        logging.debug("🔧 [TypeSaveConfig] set %s to frozen/read-only", model.__name__)
         model.model_config = {"frozen": True} # set this BaseModel to readonly/frozen
 
 
-   
+
     @classmethod
     def _load_toml(cls, filenames:list[str]) -> dict:
         toml_config = {}
@@ -177,12 +196,12 @@ class ConfigModel(BaseModel):
                 try:
                     with open(toml_file_path, "rb") as f:
                         toml_config = tomllib.load(f)
-                    logging.debug(f"🔧 data loaded from toml: {toml_file_path}")
-                
-                except Exception as e:
-                    logging.debug(f"🔧 failed Loading data from toml-file {toml_file_path}, skipped {e}")
+                    logging.debug("🔧 [TypeSaveConfig] data loaded from toml: %s", toml_file_path)
+
+                except (FileNotFoundError, tomllib.TOMLDecodeError) as e:
+                    logging.debug("🔧 [TypeSaveConfig] failed Loading data from toml-file %s , skipped %s", toml_file_path, e)
             else:
-                logging.debug(f"🔧 toml-file '{toml_file_path}' not found, skipped")
+                logging.debug("🔧 [TypeSaveConfig] toml-file '%s' not found, skipped", toml_file_path)
         return toml_config
 
     @classmethod
@@ -192,34 +211,36 @@ class ConfigModel(BaseModel):
             json_file_path = Path(json_file)
             if json_file_path.exists():
                 try:
-                    with open(json_file_path, "r") as f:  # Open in text mode ("r") for JSON
+                    with open(json_file_path, "r", encoding="utf-8") as f:  # Open in text mode ("r") for JSON
                         json_config = json.load(f)
-                    logging.debug(f"🔧 data loaded from json: {json_file_path}")
-                
-                except Exception as e:
-                    logging.debug(f"🔧 failed Loading data from json: {json_file_path}, skipped {e}")
+                    logging.debug("🔧 [TypeSaveConfig] data loaded from json: %s", json_file_path)
+
+                except (FileNotFoundError, json.JSONDecodeError) as e:
+                    logging.debug("🔧 [TypeSaveConfig] failed Loading data from json: %s, skipped %s", json_file_path, e)
             else:
-                logging.debug(f"🔧 json-file '{json_file_path}' not found, skipped")
+                logging.debug("🔧 [TypeSaveConfig] json-file '%s' not found, skipped", json_file_path)
         return json_config
 
 
     @classmethod
     def _load_cli(cls, prefix: str, sep: str) -> dict:
-        # Loads configuration from CLI arguments using a manual parser. This approach avoids argparse's ambiguous option matching (argprase meckert bei: tsc_user & tsc_user__uersnem, tsc_user__password). ?!)
+        """Loads configuration from CLI arguments using a manual parser. 
+        This approach avoids argparse's ambiguous option matching (argprase 
+        meckert bei: tsc_user & tsc_user__uersnem, tsc_user__password). ?!)"""
         cli_config = {}
         prefix_lower = prefix.lower()
-        
+
         # Ein Mapping von vollständigen CLI-Flag-Namen zu ihren Metadaten. Beispiel: {"--tsc_user__username": ConfigAttrMetadata(...)}
         registered_cli_flags_map: dict[str, ConfigAttrMetadata] = {}
         for m in cls.get_metadata():
             # Nur für Typen, die wir manuell parsen wollen (str, int, float, bool)
             if m.type in ['str', 'int', 'float', 'bool']:
-                full_cli_flag_name = "--" + prefix_lower + m.fullanme
+                full_cli_flag_name = "--" + prefix_lower + m.fullname
                 registered_cli_flags_map[full_cli_flag_name] = m
-        
+
         # sys.argv enthält das Skript selbst an Position 0. Wir wollen nur die Argumente danach.
-        args_to_parse = sys.argv[1:] 
-        
+        args_to_parse = sys.argv[1:]
+
         i = 0
         loaded_cli_params_log: list[str] = []
         unknown_args: list[str] = []
@@ -231,7 +252,7 @@ class ConfigModel(BaseModel):
             if match_equal:
                 key_name = match_equal.group(1) # z.B. --tsc_user__username
                 value_str = match_equal.group(2)
-                
+
                 if key_name in registered_cli_flags_map:
                     metadata_obj = registered_cli_flags_map[key_name]
                     try:
@@ -251,10 +272,11 @@ class ConfigModel(BaseModel):
                         cls._add_flat_key_value_to_nested_dict(cli_config, original_full_name, value, sep)
                         loaded_cli_params_log.append(key_name)
                     except ValueError:
-                        logging.warning(f"🔧 cli-argument '{key_name}' with value '{value_str}' could not converted to '{metadata_obj.type}', skipped.")
+                        log_msg = f"🔧 [TypeSaveConfig] cli-argument '{key_name}' with value '{value_str}' could not converted to '{metadata_obj.type}', skipped."
+                        logging.warning(log_msg)
                 else:
                     # Dies ist ein Flag, das nicht in unserer registrierten Liste ist
-                    unknown_args.append(arg)            
+                    unknown_args.append(arg)
             ## Muster 2: --key value
             elif arg.startswith('--'):
                 key_name = arg # z.B. --tsc_version
@@ -278,17 +300,20 @@ class ConfigModel(BaseModel):
                             loaded_cli_params_log.append(key_name)
                             i += 1 # Den nächsten Arg (Wert) überspringen, da er konsumiert wurde
                         except ValueError:
-                            logging.warning(f"🔧 cli-argument '{key_name}' with value '{value_str}' could not converted to '{metadata_obj.type}', skipped.")
+                            log_msg = f"🔧 [TypeSaveConfig] cli-argument '{key_name}' with value '{value_str}' could not converted to '{metadata_obj.type}', skipped."
+                            logging.warning(log_msg)
                     else:
-                        logging.warning(f"🔧 cli-argument '{key_name}' has no value, skipped.")
+                        log_msg = f"🔧[TypeSaveConfig] cli-argument '{key_name}' has no value, skipped."
+                        logging.warning(log_msg)
                 else:
                     unknown_args.append(arg) # Unbekanntes Flag
             else:
                 # Alles andere, was kein '--' am Anfang hat, als unbekannt behandeln
                 unknown_args.append(arg)
-            
+
             i += 1 # Zum nächsten cli-Argument springen
-        logging.debug(f"🔧 data loaded from cli-arguments (prefix='{prefix}'): [{', '.join(loaded_cli_params_log)}], ignored unknown [{', '.join(unknown_args)}]")
+        log_msg = f"🔧 [TypeSaveConfig] data loaded from cli-arguments (prefix='{prefix}'): [{', '.join(loaded_cli_params_log)}], ignored unknown [{', '.join(unknown_args)}]"
+        logging.debug(log_msg)
         return cli_config
 
 
@@ -297,32 +322,43 @@ class ConfigModel(BaseModel):
         env_config = {}
         prefix = prefix.upper()
         loaded_env_vars = []
-        # from dotenv import load_dotenv
-        # if hasattr(cls, 'use_dotenv') and cls.use_dotenv: # Placeholder for how 'use_dotenv' might be accessed
-        #     load_dotenv()
+
+        if use_lib_dotenv:
+            load_dotenv()
 
         # check every possible env-var. only accept base-types (str, int,..) to be set in cli/env
         for m in cls.get_metadata():
-            env_name = prefix + m.fullanme.upper()
-            env_value = os.getenv(env_name)       
+            env_name = prefix + m.fullname.upper()
+            env_value = os.getenv(env_name)
             if env_value is not None:  # skip unset env-var
                 if m.type in ['str', 'int', 'float', 'bool']: # skip lists and dicts
                     loaded_env_vars.append(env_name)
-                    cls._add_flat_key_value_to_nested_dict(env_config, m.fullanme, env_value, sep)
-        logging.debug(f"🔧 data loaded from env (prefix='{prefix}'): [{', '.join(loaded_env_vars)}]")       
+                    cls._add_flat_key_value_to_nested_dict(env_config, m.fullname, env_value, sep)
+        logging.debug("🔧 [TypeSaveConfig] data loaded from env (prefix='%s'): [%s]", prefix, ', '.join(loaded_env_vars))
         return env_config
 
 
     def print_config(self) -> None:
         """
-        Prints the configuration instance (all nested keys and values). Uses console/cli standard print() or the module 'rich', if installed.
+        Prints the configuration instance to stdout (all nested keys and values). Uses Lib Rich if available; fallback to json
         """
-        if use_rich: 
+        if use_lib_rich:
             Console().print(Pretty(self, indent_guides=True, indent_size=2))
         else:
-            logging.debug(f"--- {self.__class__.__name__} ---")
-            logging.debug(self.model_dump_json(indent=2)) # Using model_dump_json for a readable, indented output
-            logging.debug("----------------------------------\n")
+            print("-"*10, self.__class__.__name__, "-"*10)
+            print(self.model_dump_json(indent=2))
+            print("-"*50 , "\n")
+
+
+
+    def export(self, frmt:ExportFormat) -> str:
+        """Returns a 'toml' or 'json' string from current data. defaults to 'json'"""
+        if frmt == ExportFormat.TOML:
+            if use_lib_tomliw:
+                return tomli_w.dumps(self.model_dump())
+            logging.warning("[TypeSaveConfig] python package 'tomli_w' not installed, fallback to JSON format. Install tomli_w to generate TOML data...")
+
+        return self.model_dump_json(indent=2)
 
 
     @classmethod
@@ -332,13 +368,13 @@ class ConfigModel(BaseModel):
         """
         m = cls.get_metadata()
         for a in m:
-            s = f"{a.name} / {a.fullanme}\n"
+            s = f"{a.name} / {a.fullname}\n"
             s += f"{a.description}\ntype={a.type} | default={a.default}"
             print(s)
-    
+
 
     @classmethod
-    def get_metadata(cls) -> list[ConfigAttrMetadata]:        
+    def get_metadata(cls) -> list[ConfigAttrMetadata]:
         """
         Returns a flat List of all/nested defined config fields.
         """
@@ -346,22 +382,22 @@ class ConfigModel(BaseModel):
 
 
     @classmethod
-    def load(cls: Type[TConfigModel], 
-            toml_files: list[str] = ["conf.toml"],
-            json_files: list[str] = [],
+    def load(cls: Type[ConfigModelT],
+            toml_files: list[str] | None = None,
+            json_files: list[str] | None = None,
             load_env: bool = True,
             load_cli: bool = True,
-            data: dict = {},
+            data: dict | None = None,
             readonly: bool = True,
             prefix:str = "TSC_",
-        ) -> TConfigModel|None:
+        ) -> ConfigModelT|None:
         """
-        Load and merges configurations settings from different sources, in that order: 
-            source-code , toml-file, json-file, cli-parameter, env-vars. 
-        
+        Load and merges configurations settings from different sources, in that order:
+            source-code , toml-file, json-file, cli-parameter, env-vars.
+
         Returns:
             ConfigModel: A new configuration instance, preloaded and validated by pydantic. Or None, if validation had errors.
-        
+
         Parameters:
             toml_files: TOML files to load; don't use TOML if list is empty.
             json_files: JSON files to load; don't use JSON if list is empty.
@@ -372,7 +408,7 @@ class ConfigModel(BaseModel):
             prefix: Prefix for env-vars and cli-args. Hint: don't use an empty prefix for env-vars.
         """
         field_seperator:str = "__"
-        pydantic_model:Type[TConfigModel] = cls
+        pydantic_model:Type[ConfigModelT] = cls
 
         toml_config = cls._load_toml(toml_files) if toml_files else {}
         json_config = cls._load_json(json_files) if json_files else {}
@@ -387,17 +423,18 @@ class ConfigModel(BaseModel):
             merged_config = cls._deep_merge(merged_config, json_config)
             merged_config = cls._deep_merge(merged_config, cli_config)
             merged_config = cls._deep_merge(merged_config, env_config)
-            
+
             loaded_configmodel = pydantic_model(**merged_config)
             if readonly:
                 cls._set_frozen(cls)
 
-            logging.info(f"🔧 {pydantic_model.__name__}(ConfigModel) loaded as {'readonly' if readonly else 'writeable'}")
+            log_msg = f"🔧 [TypeSaveConfig] '{pydantic_model.__name__}' loaded as {'readonly' if readonly else 'writeable'}"
+            logging.info(log_msg)
             return loaded_configmodel
         except ValidationError as e:
             err_str = []
             for ve in e.errors():
                 err_str.append(f"field '{str(ve["loc"][0])}' {str(ve['type']).capitalize()},{str(ve["msg"])}")
-            logging.warning(f"🔧 Loading {pydantic_model.__name__}(ConfigModel) faild with {e.error_count()} error(s): [{"|".join(err_str)}]")          
+            log_msg = f"🔧 [TypeSaveConfig] Loading {pydantic_model.__name__}(ConfigModel) faild with {e.error_count()} error(s): [{"|".join(err_str)}]"
+            logging.warning(log_msg)
         return None
-   

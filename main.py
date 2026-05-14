@@ -1,16 +1,7 @@
 from pydantic import BaseModel, Field
-
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.pretty import Pretty
-console = Console()
-
-# Initialize logging
-import logging
-#logging.basicConfig(level=logging.DEBUG, format='%(levelname)s - %(message)s')
+from typesave_config import ConfigModel, ExportFormat
 
 
-from typesave_config import ConfigModel
 
 
 # --- Define application specific configuration  ---
@@ -47,9 +38,11 @@ if not conf:
     #AppConfig.print_help()
     exit(1)
 
-
-
 conf.print_config()
+#print(conf.export(ExportFormat.JSON))
+print(conf.export(ExportFormat.TOML))
+
+#console = Console()
 #console.print(Pretty(conf.get_metadata()))
 #print(conf.user.username, conf.user.password)
 #conf.project_nameversion="OVERWRITTEN"

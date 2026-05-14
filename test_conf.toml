@@ -3,7 +3,8 @@ project_name = "MyAdvancedProject"
 database_url = "mysql://user:pass@host:3306/app_db"
 debug_mode = false
 allowed_hosts = ["prod.example.com", "api.example.com"]
-#port = 8080
+port = 8080
+weight = 10
 
 [user]
 username = "root"
