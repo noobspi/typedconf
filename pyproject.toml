@@ -9,6 +9,7 @@ dependencies = [
     "ipykernel>=6.29.5",
     "pip>=25.1.1",
     "pydantic>=2.11.7",
+    "pytest>=9.0.3",
 ]
 
 [project.optional-dependencies]
@@ -19,3 +20,6 @@ extra = [
 
 [tool.pylint.format]
 max-line-length = 180
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/typesaveconfig"]

@@ -1,33 +1,7 @@
 """
-# TypeSaveConfig
-
-A lightweight, type-safe configuration management library powered by Pydantic v2.
+TypeSaveConfig. A lightweight, type-safe configuration management library powered by Pydantic v2.
 It centralizes application settings by merging data from multiple sources with a
 defined priority (Environment > CLI > JSON > TOML > Defaults).
-
-## Key Features:
-- **Automatic Merging**: Priority-based merging of various config sources.
-- **Deep Nesting**: Supports nested Pydantic models using `__` as a separator.
-- **Type Safety**: Full validation of types, including lists and Enums.
-- **Optional Dependencies**: Enhanced output via `rich`, `.env` support via `python-dotenv`,
-  and TOML exporting via `tomli-w`.
-- **Immutability**: Config can be optionally 'frozen' (readonly) after loading.
-
-## Usage Example:
-    class MyConfig(ConfigModel):
-        db_url: str = "localhost"
-        debug: bool = False
-
-    # Load from all sources with default prefix 'TSC_'
-    cfg = MyConfig.load(toml_files=["config.toml"])
-
-    # Access values
-    print(cfg.db_url)
-
-## CLI & Env Syntax:
-- **Environment**: `export TSC_DB_URL="postgres://..."`
-- **CLI**: `python script.py --tsc_db_url="postgres://..."`
-- **Lists (CLI)**: `--tsc_tags='["a", "b"]'` (Uses JSON-style parsing)
 """
 
 import json
@@ -43,9 +17,10 @@ from pydantic import BaseModel, ValidationError
 
 # Initialize logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
 
 class _LibWrapper:
     """
@@ -67,7 +42,7 @@ class _LibWrapper:
             installed.append("tomli-w")
 
         status_str = ", ".join(installed) if installed else "none"
-        logging.debug("🔧 [TypeSaveConfig] Extra libraries installed: %s", status_str)
+        logging.debug("[TypeSaveConfig] Found optional python-libraries: %s", status_str)
 
     @staticmethod
     def _import(name: str):
@@ -99,10 +74,12 @@ class _LibWrapper:
 
 _libs = _LibWrapper()
 
+
 class ExportFormat(Enum):
-    """Formats available for exporting the configuration."""
+    """Available export formats. TOML export need the optional python-package tomli_w to work."""
     JSON = 0
     TOML = 1
+
 
 ConfigModelT = TypeVar('ConfigModelT', bound='ConfigModel')
 
@@ -118,12 +95,15 @@ class ConfigAttrMetadata(BaseModel):
 
 class ConfigModel(BaseModel):
     """
-    The core configuration class. Inherit from this to define your config schema.
-    Provides logic for loading, merging, and validating configuration data.
+    TypeSaveConfig's core class. Inherit to define your own config-schema.
+    TypeSaveConfig is a lightweight, type-safe configuration management library powered by
+    Pydantic. It provides logic for loading configurations from TOML-, JSON-files, CLI, ENV.
+    Plus validating the configuration by pydantic :)
     """
 
     @classmethod
     def _get_attr_metadata(cls, model: Type[BaseModel], _path: str = "") -> list[ConfigAttrMetadata]:
+        """Returns flat list of all attributes (ConfigAttrMetadata)"""
         field_separator = "__"
         f = []
         for name, info in sorted(model.model_fields.items()):
@@ -170,6 +150,7 @@ class ConfigModel(BaseModel):
 
     @classmethod
     def _add_flat_key_value_to_nested_dict(cls, target_dict: dict, full_name: str, value: Any, field_separator: str):
+        """ouflattens a key to a nested dict"""
         parts = full_name.split(field_separator)
         current_level = target_dict
         for i, part in enumerate(parts):
@@ -182,6 +163,7 @@ class ConfigModel(BaseModel):
 
     @classmethod
     def _deep_merge(cls, dict1: dict, dict2: dict) -> dict:
+        """merges deeply 2 dicts"""
         for key, value in dict2.items():
             if key in dict1 and isinstance(dict1[key], dict) and isinstance(value, dict):
                 dict1[key] = cls._deep_merge(dict1[key], value)
@@ -191,6 +173,7 @@ class ConfigModel(BaseModel):
 
     @classmethod
     def _set_frozen2(cls, model: Type[BaseModel]) -> None:
+        """sets config to readonly (after loading data)"""
         model.model_config["frozen"] = True
         for info in model.model_fields.values():
             annotation = info.annotation
@@ -209,44 +192,47 @@ class ConfigModel(BaseModel):
                 if isinstance(list_item_type, type) and issubclass(list_item_type, BaseModel):
                     cls._set_frozen2(list_item_type)
         model.model_rebuild(force=True)
-        logging.debug("🔧 [TypeSaveConfig] Applied frozen state to: %s", model.__name__)
+        logging.debug("[TypeSaveConfig] Applied frozen state to: %s", model.__name__)
 
     @classmethod
     def _load_toml(cls, filenames: list[str]) -> dict:
+        """loads data from a toml file"""
         toml_config = {}
         for toml_file in filenames:
             path = Path(toml_file)
             if not path.exists():
-                logging.warning("⚠️ [TypeSaveConfig] TOML file not found: %s", path)
+                logging.warning("[TypeSaveConfig] TOML file not found: %s", path)
                 continue
             try:
                 with open(path, "rb") as f:
                     new_data = tomllib.load(f)
                     toml_config = cls._deep_merge(toml_config, new_data)
-                    logging.debug("🔧 [TypeSaveConfig] Merged TOML: %s", path)
+                    logging.debug("[TypeSaveConfig] TOML loaded: %s", path)
             except tomllib.TOMLDecodeError as e:
                 logging.warning("❌ [TypeSaveConfig] Failed to parse TOML %s: %s", path, e)
         return toml_config
 
     @classmethod
     def _load_json(cls, filenames: list[str]) -> dict:
+        """loads data from a json file"""
         json_config = {}
         for json_file in filenames:
             path = Path(json_file)
             if not path.exists():
-                logging.warning("⚠️ [TypeSaveConfig] JSON file not found: %s", path)
+                logging.warning("[TypeSaveConfig] JSON file not found: %s", path)
                 continue
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     new_data = json.load(f)
                     json_config = cls._deep_merge(json_config, new_data)
-                    logging.debug("🔧 [TypeSaveConfig] Merged JSON: %s", path)
+                    logging.debug("[TypeSaveConfig] JSON loaded: %s", path)
             except json.JSONDecodeError as e:
                 logging.warning("❌ [TypeSaveConfig] Failed to parse JSON %s: %s", path, e)
         return json_config
 
     @classmethod
     def _load_cli_json_style(cls, prefix: str, sep: str) -> dict:
+        """loads data from CLI"""
         cli_config = {}
         prefix_lower = prefix.lower()
         metadata_map = {m.fullname: m for m in cls.get_metadata()}
@@ -267,13 +253,14 @@ class ConfigModel(BaseModel):
                         found_keys.append(clean_key)
 
         if found_keys:
-            logging.debug("🔧 [TypeSaveConfig] CLI keys loaded: %s", ", ".join(found_keys))
+            logging.debug("[TypeSaveConfig] CLI loaded: %s", ", ".join(found_keys))
         else:
-            logging.debug("ℹ️ [TypeSaveConfig] No matching CLI found (Prefix: --%s)", prefix_lower)
+            logging.debug("[TypeSaveConfig] CLI nothing found (Prefix: --%s)", prefix_lower)
         return cli_config
 
     @classmethod
     def _load_env(cls, prefix: str, sep: str) -> dict:
+        """loads data from ENV"""
         env_config = {}
         prefix_upper = prefix.upper()
         _libs.load_dotenv()
@@ -287,25 +274,22 @@ class ConfigModel(BaseModel):
                 found_keys.append(env_name)
 
         if found_keys:
-            logging.debug("🔧 [TypeSaveConfig] ENV keys loaded: %s", ", ".join(found_keys))
+            logging.debug("[TypeSaveConfig] ENV loaded: %s", ", ".join(found_keys))
         else:
-            logging.debug("ℹ️ [TypeSaveConfig] No matching ENV found (Prefix: %s)", prefix_upper)
+            logging.debug("[TypeSaveConfig] ENV nothing found (Prefix: %s)", prefix_upper)
         return env_config
 
     @classmethod
     def _format_errors(cls, e: ValidationError, prefix: str, sep: str) -> str:
+        """format pydantics ValidationErrors"""
         error_messages = []
         for error in e.errors():
             loc_path = sep.join(map(str, error["loc"]))
-            env_name = f"{prefix.upper()}{loc_path.upper()}"
-            cli_flag = f"--{prefix.lower()}{loc_path.lower()}=value"
-            msg = (
-                f"\n❌ Field: '{loc_path}'"
-                f"\n   Issue: {error['msg']} ({error['type']})"
-                f"\n   How to fix: Env: export {env_name}=<value> | CLI: {cli_flag}"
-            )
-            error_messages.append(msg)
-        return "".join(error_messages)
+            _env_name = f"{prefix.upper()}{loc_path.upper()}"
+            _cli_flag = f"--{prefix.lower()}{loc_path.lower()}=value"
+            error_messages.append(f"Field: '{loc_path}'. Issue: {error['msg']} ({error['type']}).")
+            error_messages.append(f"Maybe data is missing or invalid in toml|json|cli|env? {error['input']}")
+        return " ".join(error_messages)
 
     def print_config(self) -> None:
         """Pretty-prints the current configuration. Uses 'rich' if available."""
@@ -319,7 +303,7 @@ class ConfigModel(BaseModel):
             res = _libs.toml_dumps(self.model_dump())
             if res:
                 return res
-            logging.warning("🔧 [TypeSaveConfig] tomli-w not installed, fallback to JSON.")
+            logging.warning("[TypeSaveConfig] tomli-w not installed, fallback to JSON.")
         return self.model_dump_json(indent=2)
 
     @classmethod
@@ -339,7 +323,7 @@ class ConfigModel(BaseModel):
     def load(cls: Type[ConfigModelT], toml_files: Optional[list[str]] = None,
              json_files: Optional[list[str]] = None, load_env: bool = True,
              load_cli: bool = True, data: Optional[dict[Any, Any]] = None,
-             readonly: bool = True, prefix: str = "TSC_") -> Optional[ConfigModelT]:
+             readonly: bool = True, prefix: str = "cfg_") -> Optional[ConfigModelT]:
         """
         Loads the configuration from various sources.
 
@@ -370,11 +354,11 @@ class ConfigModel(BaseModel):
             instance = cls(**merged)
             if readonly:
                 cls._set_frozen2(cls)
-            logging.info("🔧 [TypeSaveConfig] '%s' loaded (readonly=%s)", cls.__name__, readonly)
+            logging.info("[TypeSaveConfig] '%s' loaded (readonly=%s)", cls.__name__, readonly)
             return instance
         except ValidationError as e:
             err_msg = cls._format_errors(e, prefix, field_separator)
-            logging.error("🔧 [TypeSaveConfig] Validation failed: %s", err_msg)
+            logging.error("[TypeSaveConfig] Data validation failed: %s", err_msg)
             return None
 
     @classmethod
