@@ -80,8 +80,8 @@ def test_readonly_immutability():
 
 def test_env_loading(monkeypatch: pytest.MonkeyPatch):
     """Verify loading from environment variables with nesting."""
-    monkeypatch.setenv("TSC_APP_NAME", "EnvApp")
-    monkeypatch.setenv("TSC_SUB__ENABLED", "false")
+    monkeypatch.setenv("CFG_APP_NAME", "EnvApp")
+    monkeypatch.setenv("CFG_SUB__ENABLED", "false")
 
     cfg = MainConfig.load(load_env=True, load_cli=False)
     assert cfg is not None
@@ -90,7 +90,7 @@ def test_env_loading(monkeypatch: pytest.MonkeyPatch):
 
 def test_cli_loading(monkeypatch: pytest.MonkeyPatch):
     """Verify CLI argument parsing."""
-    test_args = ["script.py", "--tsc_port=1234", "--tsc_sub__level=99"]
+    test_args = ["script.py", "--cfg_port=1234", "--cfg_sub__level=99"]
     monkeypatch.setattr(sys, "argv", test_args)
 
     cfg = MainConfig.load(load_env=False, load_cli=True)
@@ -118,7 +118,7 @@ def test_toml_export():
     """Verify export functionality if tomli-w is available."""
     cfg = MainConfig(app_name="Exporter")
     # This tests the logic; if tomli-w is missing, it falls back to JSON string
-    output = cfg.export(ExportFormat.TOML)
+    output = cfg.export_config(ExportFormat.TOML)
     assert "app_name" in output
 
 

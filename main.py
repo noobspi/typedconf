@@ -27,12 +27,14 @@ class AppConfig(ConfigModel):
 
 
 
+
+
 conf = AppConfig.load(toml_files=['test_conf.toml', 'a.toml'],
                       json_files=['a.json', 'b.json'],
                       data={'version':'0.1 alpha'},
                       load_cli=True,
                       load_env=True,
-                      readonly=True,
+                      readonly=True
                       )
 if not conf:
     #AppConfig.print_help()
@@ -40,7 +42,7 @@ if not conf:
 
 conf.print_config()
 
-print(conf.export(ExportFormat.TOML))
+print(conf.export_config(ExportFormat.TOML))
 
 #console = Console()
 #console.print(Pretty(conf.get_metadata()))

@@ -12,8 +12,11 @@ import tomllib
 from enum import Enum
 from pathlib import Path
 from typing import Any, Type, TypeVar, Union, get_args, Optional
-
 from pydantic import BaseModel, ValidationError
+
+
+DEFAULT_CLI_ENV_PREFIX = 'cfg_'
+DEFAULT_CLI_ENV_SEPARATOR = '__'
 
 # Initialize logging
 logging.basicConfig(
@@ -101,6 +104,7 @@ class ConfigModel(BaseModel):
     Plus validating the configuration by pydantic :)
     """
 
+
     @classmethod
     def _get_attr_metadata(cls, model: Type[BaseModel], _path: str = "") -> list[ConfigAttrMetadata]:
         """Returns flat list of all attributes (ConfigAttrMetadata)"""
@@ -128,7 +132,7 @@ class ConfigModel(BaseModel):
             else:
                 type_name = str(target_type).replace("<class '", "").replace("'>", "")
 
-            description = f"{info.description or ''} {type_name}".strip()
+            description = f"{info.description or ''}"
 
             f.append(ConfigAttrMetadata(
                 model=model.__name__,
@@ -279,8 +283,9 @@ class ConfigModel(BaseModel):
             logging.debug("[TypeSaveConfig] ENV nothing found (Prefix: %s)", prefix_upper)
         return env_config
 
+
     @classmethod
-    def _format_errors(cls, e: ValidationError, prefix: str, sep: str) -> str:
+    def _strformat_errors(cls, e: ValidationError, prefix: str, sep: str) -> str:
         """format pydantics ValidationErrors"""
         error_messages = []
         for error in e.errors():
@@ -291,13 +296,31 @@ class ConfigModel(BaseModel):
             error_messages.append(f"Maybe data is missing or invalid in toml|json|cli|env? {error['input']}")
         return " ".join(error_messages)
 
+
+    ###################### Public API ###########################
+
+    @classmethod
+    def get_helptext(cls) -> None:
+        """Prints help documentation for all available config fields."""
+        prefix = DEFAULT_CLI_ENV_PREFIX
+        hlines = []
+        for a in cls.get_metadata():
+            hl = f" --{prefix}{a.fullname} ({a.model}.{a.name})\n   type={a.type}, default={a.default}"
+            if a.description:
+                hl += (f"\n   {a.description}")
+            hlines.append(hl)
+
+        print("\n\n".join(hlines))
+
+
     def print_config(self) -> None:
         """Pretty-prints the current configuration. Uses 'rich' if available."""
         if not _libs.print_rich(self):
             print("-" * 10, self.__class__.__name__, "-" * 10)
             print(self.model_dump_json(indent=2))
 
-    def export(self, frmt: ExportFormat) -> str:
+
+    def export_config(self, frmt: ExportFormat) -> str:
         """Exports the configuration as a TOML or JSON string."""
         if frmt == ExportFormat.TOML:
             res = _libs.toml_dumps(self.model_dump())
@@ -306,24 +329,25 @@ class ConfigModel(BaseModel):
             logging.warning("[TypeSaveConfig] tomli-w not installed, fallback to JSON.")
         return self.model_dump_json(indent=2)
 
-    @classmethod
-    def print_help(cls) -> None:
-        """Prints help documentation for all available config fields."""
-        for a in cls.get_metadata():
-            print(f"{a.name} / {a.fullname}")
-            print(f"{a.description}")
-            print(f"type={a.type} | default={a.default}")
+
 
     @classmethod
     def get_metadata(cls) -> list[ConfigAttrMetadata]:
-        """Returns a list of metadata for every field in the config model."""
+        """Returns a list of metadata (ConfigAttrMetadata) for every field in the config model."""
         return cls._get_attr_metadata(cls)
 
+
     @classmethod
-    def load(cls: Type[ConfigModelT], toml_files: Optional[list[str]] = None,
-             json_files: Optional[list[str]] = None, load_env: bool = True,
-             load_cli: bool = True, data: Optional[dict[Any, Any]] = None,
-             readonly: bool = True, prefix: str = "cfg_") -> Optional[ConfigModelT]:
+    def load(cls: Type[ConfigModelT],
+             toml_files: Optional[list[str]] = None,
+             json_files: Optional[list[str]] = None,
+             load_env: bool = True,
+             load_cli: bool = True,
+             data: Optional[dict[Any, Any]] = None,
+             readonly: bool = True,
+             cli_prefix: Optional[str | None] = None,
+             cli_separator: Optional[str | None] = None
+             ) -> Optional[ConfigModelT]:
         """
         Loads the configuration from various sources.
 
@@ -334,9 +358,12 @@ class ConfigModel(BaseModel):
             load_cli: Whether to load from CLI arguments.
             data: Initial dictionary of values (lowest priority).
             readonly: If True, the resulting config object is immutable.
-            prefix: Prefix for CLI flags and Environment variables.
+            cli_prefix: change the default prefix for CLI and ENV interface. Default = 'cfg_'
+            cli_separator: change the default fullname-separator. Default = '__'
         """
-        field_separator = "__"
+        field_separator = DEFAULT_CLI_ENV_SEPARATOR if not cli_separator else cli_separator
+        prefix = DEFAULT_CLI_ENV_PREFIX if not cli_prefix else cli_prefix
+
         merged: dict[Any, Any] = data if data is not None else {}
 
         toml_list = toml_files if toml_files is not None else []
@@ -357,14 +384,6 @@ class ConfigModel(BaseModel):
             logging.info("[TypeSaveConfig] '%s' loaded (readonly=%s)", cls.__name__, readonly)
             return instance
         except ValidationError as e:
-            err_msg = cls._format_errors(e, prefix, field_separator)
+            err_msg = cls._strformat_errors(e, prefix, field_separator)
             logging.error("[TypeSaveConfig] Data validation failed: %s", err_msg)
             return None
-
-    @classmethod
-    def _set_frozen(cls, model: Type[BaseModel]) -> None:
-        cls._set_frozen2(model)
-
-    @classmethod
-    def _load_cli(cls, prefix: str, sep: str) -> dict:
-        return cls._load_cli_json_style(prefix, sep)
