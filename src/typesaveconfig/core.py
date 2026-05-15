@@ -20,7 +20,7 @@ DEFAULT_CLI_ENV_SEPARATOR = '__'
 
 # Initialize logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
@@ -93,6 +93,7 @@ class ConfigAttrMetadata(BaseModel):
     fullname: str
     type: str
     raw_type: Any
+    isa_ConfigModel: bool = False
     description: str = ''
     default: Any = None
 
@@ -104,6 +105,8 @@ class ConfigModel(BaseModel):
     Plus validating the configuration by pydantic :)
     """
 
+    _cli_prefix:str = 'cfg_'
+    _field_separator:str = '__'
 
     @classmethod
     def _get_attr_metadata(cls, model: Type[BaseModel], _path: str = "") -> list[ConfigAttrMetadata]:
@@ -133,15 +136,17 @@ class ConfigModel(BaseModel):
                 type_name = str(target_type).replace("<class '", "").replace("'>", "")
 
             description = f"{info.description or ''}"
+            isa_pydantic_model = isinstance(target_type, type) and issubclass(target_type, BaseModel)
 
             f.append(ConfigAttrMetadata(
-                model=model.__name__,
-                name=name,
-                fullname=f_fullname,
-                raw_type=raw_annotation,
-                type=type_name,
-                description=description,
-                default=info.default if info.default is not None else None
+                model = model.__name__,
+                name = name,
+                fullname = f_fullname,
+                raw_type = raw_annotation,
+                isa_ConfigModel = isa_pydantic_model,
+                type = type_name,
+                description = description,
+                default = info.default if info.default is not None else None
             ))
 
             if isinstance(target_type, type) and issubclass(target_type, BaseModel):
@@ -175,9 +180,10 @@ class ConfigModel(BaseModel):
                 dict1[key] = value
         return dict1
 
+
     @classmethod
-    def _set_frozen2(cls, model: Type[BaseModel]) -> None:
-        """sets config to readonly (after loading data)"""
+    def _set_frozen(cls, model: Type[BaseModel]) -> None:
+        """sets configuration recursiv to readonly"""
         model.model_config["frozen"] = True
         for info in model.model_fields.values():
             annotation = info.annotation
@@ -190,17 +196,18 @@ class ConfigModel(BaseModel):
                     target = filtered[0]
 
             if isinstance(target, type) and issubclass(target, BaseModel):
-                cls._set_frozen2(target)
+                cls._set_frozen(target)
             elif origin is list and args:
                 list_item_type = args[0]
                 if isinstance(list_item_type, type) and issubclass(list_item_type, BaseModel):
-                    cls._set_frozen2(list_item_type)
+                    cls._set_frozen(list_item_type)
         model.model_rebuild(force=True)
-        logging.debug("[TypeSaveConfig] Applied frozen state to: %s", model.__name__)
+        logging.debug("[TypeSaveConfig] Applied frozen-state/readonly to '%s'", model.__name__)
+
 
     @classmethod
     def _load_toml(cls, filenames: list[str]) -> dict:
-        """loads data from a toml file"""
+        """loads data from a toml file-list"""
         toml_config = {}
         for toml_file in filenames:
             path = Path(toml_file)
@@ -211,10 +218,11 @@ class ConfigModel(BaseModel):
                 with open(path, "rb") as f:
                     new_data = tomllib.load(f)
                     toml_config = cls._deep_merge(toml_config, new_data)
-                    logging.debug("[TypeSaveConfig] TOML loaded: %s", path)
+                    logging.debug("[TypeSaveConfig] TOML read from: %s", path)
             except tomllib.TOMLDecodeError as e:
-                logging.warning("❌ [TypeSaveConfig] Failed to parse TOML %s: %s", path, e)
+                logging.warning("[TypeSaveConfig] Failed to read & parse TOML %s: %s", path, e)
         return toml_config
+
 
     @classmethod
     def _load_json(cls, filenames: list[str]) -> dict:
@@ -223,15 +231,15 @@ class ConfigModel(BaseModel):
         for json_file in filenames:
             path = Path(json_file)
             if not path.exists():
-                logging.warning("[TypeSaveConfig] JSON file not found: %s", path)
+                logging.warning("[TypeSaveConfig] JSON file not found %s", path)
                 continue
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     new_data = json.load(f)
                     json_config = cls._deep_merge(json_config, new_data)
-                    logging.debug("[TypeSaveConfig] JSON loaded: %s", path)
+                    logging.debug("[TypeSaveConfig] JSON read from %s", path)
             except json.JSONDecodeError as e:
-                logging.warning("❌ [TypeSaveConfig] Failed to parse JSON %s: %s", path, e)
+                logging.warning("[TypeSaveConfig] Failed to read & parse JSON %s: %s", path, e)
         return json_config
 
     @classmethod
@@ -257,7 +265,7 @@ class ConfigModel(BaseModel):
                         found_keys.append(clean_key)
 
         if found_keys:
-            logging.debug("[TypeSaveConfig] CLI loaded: %s", ", ".join(found_keys))
+            logging.debug("[TypeSaveConfig] CLI read from [%s]", ",".join(found_keys))
         else:
             logging.debug("[TypeSaveConfig] CLI nothing found (Prefix: --%s)", prefix_lower)
         return cli_config
@@ -278,7 +286,7 @@ class ConfigModel(BaseModel):
                 found_keys.append(env_name)
 
         if found_keys:
-            logging.debug("[TypeSaveConfig] ENV loaded: %s", ", ".join(found_keys))
+            logging.debug("[TypeSaveConfig] ENV read from [%s]", ",".join(found_keys))
         else:
             logging.debug("[TypeSaveConfig] ENV nothing found (Prefix: %s)", prefix_upper)
         return env_config
@@ -293,25 +301,30 @@ class ConfigModel(BaseModel):
             _env_name = f"{prefix.upper()}{loc_path.upper()}"
             _cli_flag = f"--{prefix.lower()}{loc_path.lower()}=value"
             error_messages.append(f"Field: '{loc_path}'. Issue: {error['msg']} ({error['type']}).")
-            error_messages.append(f"Maybe data is missing or invalid in toml|json|cli|env? {error['input']}")
+            #error_messages.append(f"Maybe some data is missing or invalid (toml|json|cli|env)!? {error['input']}")
         return " ".join(error_messages)
 
 
     ###################### Public API ###########################
 
     @classmethod
-    def get_helptext(cls) -> None:
+    def print_help(cls, header:str='', footer:str='') -> None:
         """Prints help documentation for all available config fields."""
         prefix = DEFAULT_CLI_ENV_PREFIX
         hlines = []
+
+        if header:
+            hlines.append(header)
         for a in cls.get_metadata():
-            hl = f" --{prefix}{a.fullname} ({a.model}.{a.name})\n   type={a.type}, default={a.default}"
-            if a.description:
-                hl += (f"\n   {a.description}")
-            hlines.append(hl)
+            if not a.isa_ConfigModel:   # exclude model from cli-list
+                hl = f" --{prefix}{a.fullname} ({a.model}.{a.name})\n   type={a.type}, default={a.default}"
+                if a.description:
+                    hl += (f"\n   {a.description}")
+                hlines.append(hl)
+        if footer:
+            hlines.append(footer)
 
-        print("\n\n".join(hlines))
-
+        print('\n\n'.join(hlines))
 
     def print_config(self) -> None:
         """Pretty-prints the current configuration. Uses 'rich' if available."""
@@ -346,7 +359,7 @@ class ConfigModel(BaseModel):
              data: Optional[dict[Any, Any]] = None,
              readonly: bool = True,
              cli_prefix: Optional[str | None] = None,
-             cli_separator: Optional[str | None] = None
+             #cli_separator: Optional[str | None] = None,
              ) -> Optional[ConfigModelT]:
         """
         Loads the configuration from various sources.
@@ -361,9 +374,15 @@ class ConfigModel(BaseModel):
             cli_prefix: change the default prefix for CLI and ENV interface. Default = 'cfg_'
             cli_separator: change the default fullname-separator. Default = '__'
         """
-        field_separator = DEFAULT_CLI_ENV_SEPARATOR if not cli_separator else cli_separator
-        prefix = DEFAULT_CLI_ENV_PREFIX if not cli_prefix else cli_prefix
+        # setup cli/env prefix & separator
+        prefix = DEFAULT_CLI_ENV_PREFIX
+        separator = DEFAULT_CLI_ENV_SEPARATOR
+        if cli_prefix is not None:
+            prefix = cli_prefix
+        # if cli_separator is not None:
+        #     separator = cli_separator
 
+        # load data from sources
         merged: dict[Any, Any] = data if data is not None else {}
 
         toml_list = toml_files if toml_files is not None else []
@@ -373,17 +392,17 @@ class ConfigModel(BaseModel):
         merged = cls._deep_merge(merged, cls._load_json(json_list))
 
         if load_cli:
-            merged = cls._deep_merge(merged, cls._load_cli_json_style(prefix, field_separator))
+            merged = cls._deep_merge(merged, cls._load_cli_json_style(prefix, separator))
         if load_env:
-            merged = cls._deep_merge(merged, cls._load_env(prefix, field_separator))
+            merged = cls._deep_merge(merged, cls._load_env(prefix, separator))
 
         try:
             instance = cls(**merged)
             if readonly:
-                cls._set_frozen2(cls)
-            logging.info("[TypeSaveConfig] '%s' loaded (readonly=%s)", cls.__name__, readonly)
+                cls._set_frozen(cls)
+            logging.info("[TypeSaveConfig] '%s' configuration loaded (readonly=%s)", cls.__name__, readonly)
             return instance
         except ValidationError as e:
-            err_msg = cls._strformat_errors(e, prefix, field_separator)
+            err_msg = cls._strformat_errors(e, prefix, separator)
             logging.error("[TypeSaveConfig] Data validation failed: %s", err_msg)
             return None

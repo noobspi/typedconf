@@ -34,7 +34,8 @@ conf = AppConfig.load(toml_files=['test_conf.toml', 'a.toml'],
                       data={'version':'0.1 alpha'},
                       load_cli=True,
                       load_env=True,
-                      readonly=True
+                      readonly=True,
+                      cli_prefix="y_",
                       )
 if not conf:
     #AppConfig.print_help()
