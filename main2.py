@@ -1,6 +1,6 @@
 """TypeSaveConfig Demo App"""
-from pydantic import Field
-from typesaveconfig import ConfigModel, ConfigError, ExportFormat
+from pydantic import Field, ValidationError
+from typesaveconfig import ConfigModel, ConfigError
 
 
 
@@ -22,9 +22,9 @@ class AppConfig(ConfigModel):
 
 # MAIN
 try:
-    conf = AppConfig.load(toml_files=['a.toml'])
-    conf.print_config()
-    print(conf.export_config(ExportFormat.TOML))
-
-except ConfigError:
-    AppConfig.print_help(header=">Hello World", footer=">Good by")
+    conf = AppConfig.load(toml_files=['a.toml'], readonly=False)
+    conf.app_name = "XXX"    # RAISES ERROR
+    print(conf.dumps_json() )
+    
+except (ConfigError, ValidationError) as e:
+    print(e, AppConfig.cli_helptext())

@@ -7,9 +7,19 @@ import sys
 from pathlib import Path
 import json
 from pydantic import Field, ValidationError
-from typesaveconfig import ConfigModel, ExportFormat, ConfigError
+from typesaveconfig import ConfigModel, ConfigError
 from typing import Optional, Literal
 from enum import Enum
+
+
+# Check, if optional python-package tomli-w is installed => skip tests
+IS_TOMLIW_INSTALLED: bool
+try:
+    import tomli_w
+    IS_TOMLIW_INSTALLED = True
+except ImportError:
+    IS_TOMLIW_INSTALLED = False
+
 
 # Testdata  Config-Schema
 class SubConfig(ConfigModel):
@@ -79,7 +89,7 @@ def test_metadata_generation():
     assert "sub__level" in fullnames
 
 
-def test_dict_merge_nested():
+def test_merge_data():
     """Verify deep merging of dictionaries."""
     data = {
         "port": 9090,
@@ -372,36 +382,38 @@ def test_priority_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Assert priority: ENV (4444) wins
     assert cfg.port == 4444
 
-
+@pytest.mark.skipif(not IS_TOMLIW_INSTALLED, reason="Optional package tomli_w not installed")
 def test_export_toml():
-    """Verify export functionality if tomli-w is available."""
+    """Verify export functionality if tomli-w is available. skips test, if package is not installed."""
     cfg = MainConfig(app_name="Exporter")
-    # This tests the logic; if tomli-w is missing, it falls back to JSON string
-    output = cfg.export_config(ExportFormat.TOML)
+    output = str(cfg.dumps_toml())
     assert "app_name" in output
 
 
 def test_export_json():
     """Verify export functionality for JSON available."""
     cfg = MainConfig(app_name="Exporter")
-    jtxt = cfg.export_config(ExportFormat.JSON)
+    jtxt = cfg.dumps_json()
     jdata = json.loads(jtxt)
 
     assert jdata['app_name'] == "Exporter"
 
 
-def test_readonly():
-    """Verify that readonly=True (pydantic frozen) prevents attribute modification and False allows it."""
-
-    # 1. Test Readonly Mode
+def test_config_readonly():
+    """Verify that readonly=True (pydantic frozen) prevents attribute modification."""
     cfg_ro = MainConfig.load(readonly=True, load_env=False, load_cli=False)
     assert cfg_ro.app_name == "TestApp"
-
     with pytest.raises(ValidationError):
         cfg_ro.app_name = "Hacked"
 
-    # 2. Test Mutable Mode
-    cfg_rw = MainConfig.load(readonly=False, load_env=False, load_cli=False)
+
+def test_config_writeable():
+    """Verify that readonly=False (pydantic not frozen)  allows attribute modification."""
+    class RwConfig(ConfigModel):
+        app_name: str = "Unmutale App"
+
+    cfg_rw = RwConfig.load(readonly=False, load_env=False, load_cli=False)
     cfg_rw.app_name = "MutableApp"
     assert cfg_rw.app_name == "MutableApp"
+
 

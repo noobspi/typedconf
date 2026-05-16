@@ -30,12 +30,11 @@ Key Features:
 - CLI: `python script.py --cgf_db_url="postgres://..."`
 - Lists (CLI): `--cgf_tags='["a", "b"]'` (Uses JSON-style parsing)
 """
-from .core import ConfigModel, ConfigError, ExportFormat, ConfigAttrMetadata
+from .core import ConfigModel, ConfigError, ConfigAttrMetadata
 
 __all__ = [
     "ConfigModel",
     "ConfigError",
-    "ExportFormat",
     "ConfigAttrMetadata",
 ]
 

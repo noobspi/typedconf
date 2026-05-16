@@ -15,8 +15,8 @@ from typing import Any, Type, TypeVar, Union, get_args, Optional
 from pydantic import BaseModel, ValidationError
 
 
-DEFAULT_CLI_ENV_PREFIX = 'cfg_'
-DEFAULT_CLI_ENV_SEPARATOR = '__'
+_DEFAULT_CLI_ENV_PREFIX = 'cfg_'
+_DEFAULT_CLI_ENV_SEPARATOR = '__'
 
 # Initialize logging
 logging.basicConfig(
@@ -30,24 +30,11 @@ logging.basicConfig(
 class _LibWrapper:
     """
     Internal abstraction for optional third-party libraries.
-    Ensures the library remains functional even if 'rich', 'python-dotenv',
-    or 'tomli-w' are not installed.
+    Ensures the library remains functional even 'tomli-w' is not installed.
     """
     def __init__(self):
-        self.rich, self.has_rich = self._import("rich")
-        self.dotenv, self.has_dotenv = self._import("dotenv")
         self.tomli_w, self.has_tomliw = self._import("tomli_w")
-
-        installed = []
-        if self.has_rich:
-            installed.append("rich")
-        if self.has_dotenv:
-            installed.append("python-dotenv")
-        if self.has_tomliw:
-            installed.append("tomli-w")
-
-        status_str = ", ".join(installed) if installed else "none"
-        logging.debug("[TypeSaveConfig] Found optional python-libraries: %s", status_str)
+        logging.debug("[TypeSaveConfig] Found optional python-package 'tomli-w'")
 
     @staticmethod
     def _import(name: str):
@@ -56,34 +43,13 @@ class _LibWrapper:
         except ImportError:
             return None, False
 
-    def load_dotenv(self) -> None:
-        """load data via lib dotenv"""
-        if self.has_dotenv and self.dotenv is not None:
-            self.dotenv.load_dotenv()
-
-    def print_rich(self, obj: Any) -> bool:
-        """print data to console via lib rich"""
-        if self.has_rich and self.rich is not None:
-            from rich.console import Console
-            from rich.pretty import Pretty
-            console = Console()
-            console.print(Pretty(obj, indent_guides=True, indent_size=2))
-            return True
-        return False
-
     def toml_dumps(self, data: dict) -> Optional[str]:
-        """print data in toml format"""
+        """dumps data in toml format"""
         if self.has_tomliw and self.tomli_w is not None:
             return self.tomli_w.dumps(data)
         return None
-
 _libs = _LibWrapper()
 
-
-class ExportFormat(Enum):
-    """Available export formats. TOML export need the optional python-package tomli_w to work."""
-    JSON = 0
-    TOML = 1
 
 
 class ConfigError(Exception):
@@ -292,7 +258,6 @@ class ConfigModel(BaseModel):
         """loads data from ENV"""
         env_config = {}
         prefix_upper = prefix.upper()
-        _libs.load_dotenv()
         found_keys = []
 
         for m in cls.get_metadata():
@@ -331,39 +296,32 @@ class ConfigModel(BaseModel):
     ###################### Public API ###########################
 
     @classmethod
-    def print_help(cls, header:str='', footer:str='') -> None:
-        """Prints help documentation for all available config fields."""
-        prefix = DEFAULT_CLI_ENV_PREFIX
+    def cli_helptext(cls) -> str:
+        """Returns help-text documentation for all available config fields."""
+        prefix = _DEFAULT_CLI_ENV_PREFIX
         hlines = []
 
-        if header:
-            hlines.append(header)
         for a in cls.get_metadata():
-            if not a.isa_ConfigModel:   # exclude model from cli-list
+            if not a.isa_ConfigModel:   # exclude pydantic/COnfigModels from cli-list
                 hl = f" --{prefix}{a.fullname} ({a.model}.{a.name})\n   type={a.type}, default={a.default}"
                 if a.description:
                     hl += (f"\n   {a.description}")
                 hlines.append(hl)
-        if footer:
-            hlines.append(footer)
 
-        print('\n\n'.join(hlines))
-
-    def print_config(self) -> None:
-        """Pretty-prints the current configuration. Uses 'rich' if available."""
-        if not _libs.print_rich(self):
-            print("-" * 10, self.__class__.__name__, "-" * 10)
-            print(self.model_dump_json(indent=2))
+        return '\n\n'.join(hlines)
 
 
-    def export_config(self, frmt: ExportFormat) -> str:
-        """Exports the configuration as a TOML or JSON string."""
-        if frmt == ExportFormat.TOML:
-            res = _libs.toml_dumps(self.model_dump())
-            if res:
-                return res
-            logging.warning("[TypeSaveConfig] tomli-w not installed, fallback to JSON.")
-        return self.model_dump_json(indent=2)
+    def dumps_toml(self) -> str|None:
+        """Dumps the configuration as TOML string. Uses optional python-package "tomli-w" to work. 
+           Returns None, if package tomli-w is not installed."""
+        if _libs.has_tomliw:
+            return _libs.toml_dumps(self.model_dump())
+        else:
+            return None
+
+    def dumps_json(self, pretty:bool=True) -> str:
+        """Dumps the configuration as JSON string."""
+        return self.model_dump_json(indent=2) if pretty else self.model_dump_json()
 
 
 
@@ -399,8 +357,8 @@ class ConfigModel(BaseModel):
             cli_separator: change the default fullname-separator. Default = '__'
         """
         # setup cli/env prefix & separator
-        prefix = DEFAULT_CLI_ENV_PREFIX
-        separator = DEFAULT_CLI_ENV_SEPARATOR
+        prefix = _DEFAULT_CLI_ENV_PREFIX
+        separator = _DEFAULT_CLI_ENV_SEPARATOR
         if cli_prefix is not None:
             prefix = cli_prefix
         # if cli_separator is not None:
@@ -421,22 +379,19 @@ class ConfigModel(BaseModel):
             merged = cls._deep_merge(merged, cls._load_env(prefix, separator))
 
         try:
-            #instance = cls(**merged)
             instance = cls.model_validate(merged)
+            # if readonly:
+            #     class FrozenModel(cls):
+            #         """Readonly Version"""
+            #         model_config = {**cls.model_config, "frozen": True}
+            #     instance = FrozenModel.model_validate(merged)
             if readonly:
-                class FrozenModel(cls):
-                    """Readonly Version"""
-                    model_config = {**cls.model_config, "frozen": True}
-                instance = FrozenModel.model_validate(merged)
-            if readonly:
-                #cls._set_frozen(cls)
-                instance = instance.model_copy(deep=True)
+                cls._set_frozen(cls)
 
             logging.info("[TypeSaveConfig] '%s' configuration loaded (readonly=%s)", cls.__name__, readonly)
             return instance # type: ignore
         except ValidationError as e:
             err_msg = cls._validationerror2log(e)
             err_fields = []
-            logging.error("[TypeSaveConfig] Data validation failed: %s", err_msg)
-            #return None
+            logging.warning("[TypeSaveConfig] Data validation failed: %s", err_msg)
             raise ConfigError(err_msg, err_fields) from e
