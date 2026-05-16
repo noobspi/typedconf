@@ -87,7 +87,7 @@ class ExportFormat(Enum):
 
 
 class ConfigError(Exception):
-    """Raised when configuration validation fails. 
+    """Raised when configuration validation fails.
     Either data for the field(s) is missing, or data (from toml|json|cli|env|source) is invalid"""
     def __init__(self, message: str, fields: list[str]):
         self.fields = fields
@@ -310,52 +310,20 @@ class ConfigModel(BaseModel):
 
 
     @classmethod
-    def _get_model_name_for_path(cls, current_model: Type[BaseModel], loc: tuple) -> str:
-        """Traverses the model tree based on the Pydantic loc tuple."""
-        # Wenn nur noch ein Element da ist, sind wir beim Feld im aktuellen Modell
-        if len(loc) <= 1:
-            return current_model.__name__
-        
-        field_name = loc[0]
-        if field_name in current_model.model_fields:
-            field_info = current_model.model_fields[field_name]
-            # Hole den Typ, ignoriere Optional/Union etc.
-            annotation = field_info.annotation
-            origin = getattr(annotation, "__origin__", None)
-            
-            # Zieltyp finden
-            target = get_args(annotation)[0] if origin is list else annotation
-            
-            if isinstance(target, type) and issubclass(target, BaseModel):
-                return cls._get_model_name_for_path(target, loc[1:])
-        
-        return current_model.__name__
-
-    @classmethod
     def _validationerror2log(cls, e: ValidationError) -> str:
         """Format pydantics ValidationError for logging"""
         error_messages = []
         for error in e.errors():
-            loc = error["loc"]
             field_name = '.'.join(map(str, error["loc"]))
-            #model_name = cls._get_model_name_for_path(cls, loc)
             model_name = e.title
             constraint_desc = error['msg']
             error_desc = error['type']
-            error_messages.append(f"'{model_name}.{field_name}' {constraint_desc} but {error_desc}.")
-        
+            error_messages.append(f"'{model_name}.{field_name}' {constraint_desc} ({error_desc}).")
+
         validation_input_data = e.errors()[0]['input']
-        error_messages.append(f"Either data is missing, or data (from toml|json|cli|env|source) is invalid. data= {validation_input_data}")
+        error_messages.append(f"Either key is missing, or value is invalid: {validation_input_data}")
         return " ".join(error_messages)
 
-
-    @classmethod
-    def _validationerror2fields(cls, e: ValidationError) -> list[str]:
-        """Extract corrupted Fields from pydantics ValidationError"""
-        fields = []
-        for error in e.errors():
-            fields.append(error["loc"])
-        return fields
 
 
 
@@ -411,21 +379,21 @@ class ConfigModel(BaseModel):
              json_files: Optional[list[str]] = None,
              load_env: bool = True,
              load_cli: bool = True,
-             data: Optional[dict[Any, Any]] = None,
+             payload: Optional[dict[Any, Any]] = None,
              readonly: bool = True,
              cli_prefix: Optional[str | None] = None,
              #cli_separator: Optional[str | None] = None,
              ) -> ConfigModelT:
         """
         Loads the configuration from various sources.
-        Raises ConfigError, if configuration validation fails.        
-
+        Raises ConfigError, if configuration validation fails.
+        Merge order ENV > CLI > JSON > TOML > Payload > Defaults (ENV has highest priority)
         Args:
             toml_files: List of TOML file paths to load.
             json_files: List of JSON file paths to load.
             load_env: Whether to load from Environment Variables.
             load_cli: Whether to load from CLI arguments.
-            data: Initial dictionary of values (lowest priority).
+            payload: Initial dictionary of values (lowest priority).
             readonly: If True, the resulting config object is immutable.
             cli_prefix: change the default prefix for CLI and ENV interface. Default = 'cfg_'
             cli_separator: change the default fullname-separator. Default = '__'
@@ -439,7 +407,7 @@ class ConfigModel(BaseModel):
         #     separator = cli_separator
 
         # load data from sources
-        merged: dict[Any, Any] = data if data is not None else {}
+        merged: dict[Any, Any] = payload if payload is not None else {}
 
         toml_list = toml_files if toml_files is not None else []
         json_list = json_files if json_files is not None else []
@@ -455,11 +423,17 @@ class ConfigModel(BaseModel):
         try:
             #instance = cls(**merged)
             instance = cls.model_validate(merged)
-
             if readonly:
-                cls._set_frozen(cls)
+                class FrozenModel(cls):
+                    """Readonly Version"""
+                    model_config = {**cls.model_config, "frozen": True}
+                instance = FrozenModel.model_validate(merged)
+            if readonly:
+                #cls._set_frozen(cls)
+                instance = instance.model_copy(deep=True)
+
             logging.info("[TypeSaveConfig] '%s' configuration loaded (readonly=%s)", cls.__name__, readonly)
-            return instance
+            return instance # type: ignore
         except ValidationError as e:
             err_msg = cls._validationerror2log(e)
             err_fields = []

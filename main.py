@@ -31,7 +31,7 @@ class AppConfig(ConfigModel):
 
 conf = AppConfig.load(toml_files=['test_conf.toml', 'a.toml'],
                       json_files=['a.json', 'b.json'],
-                      data={'version':'0.1 alpha'},
+                      payload={'version':'0.1 alpha'},
                       load_cli=True,
                       load_env=True,
                       readonly=True,

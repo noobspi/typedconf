@@ -8,6 +8,8 @@ from pathlib import Path
 import json
 from pydantic import Field, ValidationError
 from typesaveconfig import ConfigModel, ExportFormat, ConfigError
+from typing import Optional, Literal
+from enum import Enum
 
 # Testdata  Config-Schema
 class SubConfig(ConfigModel):
@@ -21,6 +23,17 @@ class MainConfig(ConfigModel):
     port: int = 8080
     tags: list[str] = Field(default_factory=list)
     sub: SubConfig = Field(default_factory=SubConfig)
+
+
+class Status(str, Enum):
+    ON = "on"
+    OFF = "off"
+
+class ComplexConfig(ConfigModel):
+    optional_val: Optional[int] = None
+    status: Status = Status.ON
+    mode: Literal["prod", "dev"] = "dev"
+    tags: list[str] = []
 
 
 @pytest.fixture
@@ -72,7 +85,7 @@ def test_dict_merge_nested():
         "port": 9090,
         "sub": {"level": 5}
     }
-    cfg = MainConfig.load(data=data, load_env=False, load_cli=False)
+    cfg = MainConfig.load(payload=data, load_env=False, load_cli=False)
     assert cfg is not None
     assert cfg.port == 9090
     assert cfg.sub.level == 5
@@ -106,7 +119,7 @@ def test_load_sourcecode_payload():
 
     # Load with initial_data, skipping other sources
     cfg = MainConfig.load(
-        data=initial_data,
+        payload=initial_data,
         toml_files=[],
         json_files=[],
         load_env=False,
@@ -191,6 +204,46 @@ def test_cli_prefix_override(monkeypatch: pytest.MonkeyPatch):
     assert cfg.port == 9999
 
 
+def test_optional_fields():
+    """Verify None/Optional fields are handled correctly."""
+    # Test with None explicitly
+    data = {"optional_val": None}
+    cfg = ComplexConfig.load(payload=data, load_env=False, load_cli=False)
+    assert cfg.optional_val is None
+
+
+def test_nested_list_of_models():
+    """Verify deep list of models."""
+    class Item(ConfigModel):
+        id: int
+    class Container(ConfigModel):
+        items: list[Item]
+
+    data = {"items": [{"id": 1}, {"id": 2}]}
+    cfg = Container.load(payload=data, load_env=False, load_cli=False)
+    assert len(cfg.items) == 2
+    assert cfg.items[1].id == 2
+
+
+
+def test_cli_empty_list_override(monkeypatch):
+    """Verify CLI can pass empty lists/collections."""
+    test_args = ["script.py", "--cfg_tags=[]"]
+    monkeypatch.setattr(sys, "argv", test_args)
+
+    cfg = ComplexConfig.load(load_env=False, load_cli=True, cli_prefix="cfg_")
+    assert cfg.tags == []
+
+
+def test_env_case_insensitivity(monkeypatch):
+    """Verify that ENV variables are accepted (Pydantic usually handles this)."""
+    # Test uppercase ENV assignment
+    monkeypatch.setenv("CFG_STATUS", "on")
+    # Pydantic matches this because it normalizes ENV keys
+    cfg = ComplexConfig.load(load_env=True, load_cli=False)
+    assert cfg.status == Status.ON
+
+
 def test_cli_complex_json_input(monkeypatch: pytest.MonkeyPatch):
     """Verify CLI can accept JSON strings for lists and dicts."""
     class ComplexConfig(ConfigModel):
@@ -215,20 +268,12 @@ def test_validation_failure_raise_configerror():
     """Verify that invalid types results in a ConfigError."""
     # 'port' expects int, providing string that isn't castable to int
     data = {"port": "invalid_number"}
-    try:
-        _cfg = MainConfig.load(data=data, load_env=False, load_cli=False)
-        assert True, "Loading didn't fail, but data is not castable from str->int?!"
-    except ConfigError:
-        return
-    assert True, "Loading correctly failed, but raised a wrong Error"
+
+    with pytest.raises(ConfigError):
+        _cfg = MainConfig.load(payload=data, load_env=False, load_cli=False)
 
 
-
-
-
-
-
-def test_type_safety_and_coercion():
+def test_typesafe_scalar():
     """Verify pydantic handles type coercion for int, float, bool."""
     class TypeTestConfig(ConfigModel):
         val_int: int
@@ -237,11 +282,22 @@ def test_type_safety_and_coercion():
 
     # Pydantic coerces "1" to 1, "1.5" to 1.5, "true"/"1" to True
     data = {"val_int": "10", "val_float": "3.14", "val_bool": "true"}
-    cfg = TypeTestConfig.load(data=data, load_env=False, load_cli=False)
+    cfg = TypeTestConfig.load(payload=data, load_env=False, load_cli=False)
 
     assert cfg.val_int == 10
     assert cfg.val_float == 3.14
     assert cfg.val_bool is True
+
+
+def test_typesafe_enum():
+    """Verify Enums and Literals are restricted."""
+    # Valid
+    cfg = ComplexConfig.load(payload={"status": "off", "mode": "prod"}, load_env=False, load_cli=False)
+    assert cfg.status == Status.OFF
+
+    # Invalid
+    with pytest.raises(ConfigError):
+        ComplexConfig.load(payload={"mode": "invalid"}, load_env=False, load_cli=False)
 
 
 def test_priority_source_payload(tmp_path: Path):
@@ -255,7 +311,7 @@ def test_priority_source_payload(tmp_path: Path):
     data = {"port": 1111}
 
     cfg = MainConfig.load(
-        data=data,
+        payload=data,
         toml_files=[str(toml_path)],
         load_env=False,
         load_cli=False
@@ -288,7 +344,7 @@ def test_priority_toml_vs_json(config_files: tuple[Path, Path]):
 
 def test_priority_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """
-    Verify priority: ENV > CLI > JSON > TOML.
+    Verify priority: ENV > CLI > JSON > TOML > Payload > Defaults
     We test the 'port' field which is an integer.
     """
     # 1. TOML (lowest priority)
@@ -317,10 +373,35 @@ def test_priority_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert cfg.port == 4444
 
 
-def test_toml_export():
+def test_export_toml():
     """Verify export functionality if tomli-w is available."""
     cfg = MainConfig(app_name="Exporter")
     # This tests the logic; if tomli-w is missing, it falls back to JSON string
     output = cfg.export_config(ExportFormat.TOML)
     assert "app_name" in output
+
+
+def test_export_json():
+    """Verify export functionality for JSON available."""
+    cfg = MainConfig(app_name="Exporter")
+    jtxt = cfg.export_config(ExportFormat.JSON)
+    jdata = json.loads(jtxt)
+
+    assert jdata['app_name'] == "Exporter"
+
+
+def test_readonly():
+    """Verify that readonly=True (pydantic frozen) prevents attribute modification and False allows it."""
+
+    # 1. Test Readonly Mode
+    cfg_ro = MainConfig.load(readonly=True, load_env=False, load_cli=False)
+    assert cfg_ro.app_name == "TestApp"
+
+    with pytest.raises(ValidationError):
+        cfg_ro.app_name = "Hacked"
+
+    # 2. Test Mutable Mode
+    cfg_rw = MainConfig.load(readonly=False, load_env=False, load_cli=False)
+    cfg_rw.app_name = "MutableApp"
+    assert cfg_rw.app_name == "MutableApp"
 
