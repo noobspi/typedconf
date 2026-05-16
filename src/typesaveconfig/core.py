@@ -25,6 +25,8 @@ logging.basicConfig(
 )
 
 
+
+
 class _LibWrapper:
     """
     Internal abstraction for optional third-party libraries.
@@ -84,7 +86,13 @@ class ExportFormat(Enum):
     TOML = 1
 
 
-ConfigModelT = TypeVar('ConfigModelT', bound='ConfigModel')
+class ConfigError(Exception):
+    """Raised when configuration validation fails. 
+    Either data for the field(s) is missing, or data (from toml|json|cli|env|source) is invalid"""
+    def __init__(self, message: str, fields: list[str]):
+        self.fields = fields
+        super().__init__(message)
+
 
 class ConfigAttrMetadata(BaseModel):
     """Holds metadata about a config field for help-text and documentation generation."""
@@ -97,6 +105,8 @@ class ConfigAttrMetadata(BaseModel):
     description: str = ''
     default: Any = None
 
+
+ConfigModelT = TypeVar('ConfigModelT', bound='ConfigModel')
 class ConfigModel(BaseModel):
     """
     TypeSaveConfig's core class. Inherit to define your own config-schema.
@@ -105,8 +115,15 @@ class ConfigModel(BaseModel):
     Plus validating the configuration by pydantic :)
     """
 
+    model_config = {
+        "frozen": False,  # Wird später durch _set_frozen auf True gesetzt
+        "extra": "forbid", # Hilft Fehler bei Tippfehlern zu sammeln
+    }
+
     _cli_prefix:str = 'cfg_'
     _field_separator:str = '__'
+
+
 
     @classmethod
     def _get_attr_metadata(cls, model: Type[BaseModel], _path: str = "") -> list[ConfigAttrMetadata]:
@@ -262,7 +279,7 @@ class ConfigModel(BaseModel):
                         except (json.JSONDecodeError, TypeError):
                             parsed_val = val_str
                         cls._add_flat_key_value_to_nested_dict(cli_config, config_path, parsed_val, sep)
-                        found_keys.append(clean_key)
+                        found_keys.append(f"--{clean_key}")
 
         if found_keys:
             logging.debug("[TypeSaveConfig] CLI read from [%s]", ",".join(found_keys))
@@ -293,16 +310,54 @@ class ConfigModel(BaseModel):
 
 
     @classmethod
-    def _strformat_errors(cls, e: ValidationError, prefix: str, sep: str) -> str:
-        """format pydantics ValidationErrors"""
+    def _get_model_name_for_path(cls, current_model: Type[BaseModel], loc: tuple) -> str:
+        """Traverses the model tree based on the Pydantic loc tuple."""
+        # Wenn nur noch ein Element da ist, sind wir beim Feld im aktuellen Modell
+        if len(loc) <= 1:
+            return current_model.__name__
+        
+        field_name = loc[0]
+        if field_name in current_model.model_fields:
+            field_info = current_model.model_fields[field_name]
+            # Hole den Typ, ignoriere Optional/Union etc.
+            annotation = field_info.annotation
+            origin = getattr(annotation, "__origin__", None)
+            
+            # Zieltyp finden
+            target = get_args(annotation)[0] if origin is list else annotation
+            
+            if isinstance(target, type) and issubclass(target, BaseModel):
+                return cls._get_model_name_for_path(target, loc[1:])
+        
+        return current_model.__name__
+
+    @classmethod
+    def _validationerror2log(cls, e: ValidationError) -> str:
+        """Format pydantics ValidationError for logging"""
         error_messages = []
         for error in e.errors():
-            loc_path = sep.join(map(str, error["loc"]))
-            _env_name = f"{prefix.upper()}{loc_path.upper()}"
-            _cli_flag = f"--{prefix.lower()}{loc_path.lower()}=value"
-            error_messages.append(f"Field: '{loc_path}'. Issue: {error['msg']} ({error['type']}).")
-            #error_messages.append(f"Maybe some data is missing or invalid (toml|json|cli|env)!? {error['input']}")
+            loc = error["loc"]
+            field_name = '.'.join(map(str, error["loc"]))
+            #model_name = cls._get_model_name_for_path(cls, loc)
+            model_name = e.title
+            constraint_desc = error['msg']
+            error_desc = error['type']
+            error_messages.append(f"'{model_name}.{field_name}' {constraint_desc} but {error_desc}.")
+        
+        validation_input_data = e.errors()[0]['input']
+        error_messages.append(f"Either data is missing, or data (from toml|json|cli|env|source) is invalid. data= {validation_input_data}")
         return " ".join(error_messages)
+
+
+    @classmethod
+    def _validationerror2fields(cls, e: ValidationError) -> list[str]:
+        """Extract corrupted Fields from pydantics ValidationError"""
+        fields = []
+        for error in e.errors():
+            fields.append(error["loc"])
+        return fields
+
+
 
 
     ###################### Public API ###########################
@@ -360,9 +415,10 @@ class ConfigModel(BaseModel):
              readonly: bool = True,
              cli_prefix: Optional[str | None] = None,
              #cli_separator: Optional[str | None] = None,
-             ) -> Optional[ConfigModelT]:
+             ) -> ConfigModelT:
         """
         Loads the configuration from various sources.
+        Raises ConfigError, if configuration validation fails.        
 
         Args:
             toml_files: List of TOML file paths to load.
@@ -397,12 +453,16 @@ class ConfigModel(BaseModel):
             merged = cls._deep_merge(merged, cls._load_env(prefix, separator))
 
         try:
-            instance = cls(**merged)
+            #instance = cls(**merged)
+            instance = cls.model_validate(merged)
+
             if readonly:
                 cls._set_frozen(cls)
             logging.info("[TypeSaveConfig] '%s' configuration loaded (readonly=%s)", cls.__name__, readonly)
             return instance
         except ValidationError as e:
-            err_msg = cls._strformat_errors(e, prefix, separator)
+            err_msg = cls._validationerror2log(e)
+            err_fields = []
             logging.error("[TypeSaveConfig] Data validation failed: %s", err_msg)
-            return None
+            #return None
+            raise ConfigError(err_msg, err_fields) from e
