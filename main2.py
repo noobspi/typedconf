@@ -22,9 +22,11 @@ class AppConfig(ConfigModel):
 
 # MAIN
 try:
-    conf = AppConfig.load(toml_files=['a.toml'], readonly=False)
+    conf = AppConfig.load(toml_files=['a.toml'], 
+                          readonly=False,
+                          cli_help_enabled=True, cli_help_header="HEADER", cli_help_footer="FOOTER")
     conf.app_name = "XXX"    # RAISES ERROR
     print(conf.dumps_json() )
     
 except (ConfigError, ValidationError) as e:
-    print(e, AppConfig.cli_helptext())
+    print(AppConfig.cli_helptext(header='MYAPP', footer='END'))

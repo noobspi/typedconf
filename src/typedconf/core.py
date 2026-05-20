@@ -52,8 +52,13 @@ _libs = _LibWrapper()
 
 
 class ConfigError(Exception):
-    """Raised when configuration validation fails.
-    Either data for the field(s) is missing, or data (from toml|json|cli|env|source) is invalid"""
+    """
+        Raised when configuration validation fails. Either data for the field(s) is missing, 
+        or data (from toml|json|cli|env|source) is invalid. fields[] is a list of fieldnames 
+        containing a pydantic validation-error. 
+        TODO: currently get from pydantic only(!) the very 1st validation-error while loading data.
+        Therefore fields has alwyas only 1 item.
+    """
     def __init__(self, message: str, fields: list[str]):
         self.fields = fields
         super().__init__(message)
@@ -225,8 +230,17 @@ class ConfigModel(BaseModel):
         return json_config
 
     @classmethod
-    def _load_cli_json_style(cls, prefix: str, sep: str) -> dict:
-        """loads data from CLI"""
+    def _cli_user_want_help(cls) -> bool:
+        """Returns True, when a typical help cli param (--help, -h) is used by the scipt-caller"""
+        cli_help_keys = {'--help', '-h', '-?'}
+        for arg in sys.argv[1:]:
+            if arg in cli_help_keys:
+                return True
+        return False
+
+    @classmethod
+    def _load_cli(cls, prefix: str, sep: str) -> dict:
+        """loads data from CLI. lists are available via json-style"""
         cli_config = {}
         prefix_lower = prefix.lower()
         metadata_map = {m.fullname: m for m in cls.get_metadata()}
@@ -328,7 +342,7 @@ class ConfigModel(BaseModel):
     ###################### Public API ###########################
 
     @classmethod
-    def cli_helptext(cls) -> str:
+    def cli_helptext(cls, header:str|None=None, footer:str|None=None) -> str:
         """Returns help-text documentation for all available config fields."""
         hlines = []
         for a in cls.get_metadata():
@@ -340,7 +354,12 @@ class ConfigModel(BaseModel):
                     hl += (f"\n   {a.description}")
                 hlines.append(hl)
 
-        return '\n\n'.join(hlines)
+        sep_header_footer = "\n\n"
+        sep_hlines        = "\n\n"
+        r  = f"{header}{sep_header_footer}" if header else ''
+        r += f"Configuration fields:\n{sep_hlines.join(hlines)}" if hlines else ''
+        r += f"{sep_header_footer}{footer}" if footer else ''
+        return r
 
 
     def dumps_toml(self) -> str|None:
@@ -373,21 +392,31 @@ class ConfigModel(BaseModel):
              readonly: bool = True,
              cli_prefix: Optional[str | None] = None,
              #cli_separator: Optional[str | None] = None,
+             cli_help_enabled: bool = False,
+             cli_help_header: Optional[str | None] = None,
+             cli_help_footer: Optional[str | None] = None,
              ) -> ConfigModelT:
         """
         Loads the configuration from various sources.
         Raises ConfigError, if configuration validation fails.
         Merge order ENV > CLI > JSON > TOML > Payload > Defaults (ENV has highest priority)
         Args:
-            toml_files: List of TOML file paths to load.
-            json_files: List of JSON file paths to load.
+            toml_files: List of TOML file paths to load (field from last file in list wins).
+            json_files: List of JSON file paths to load (field from last file in list wins).
             load_env: Whether to load from Environment Variables.
             load_cli: Whether to load from CLI arguments.
             payload: Initial dictionary of values (lowest priority).
             readonly: If True, the resulting config object is immutable.
             cli_prefix: change the default prefix for CLI and ENV interface. Default = 'cfg_'
-            cli_separator: change the default fullname-separator. Default = '__'
+            cli_separator: change the default fullname-separator. Default = '__' => NOT YET IMPLEMENTED
+            cli_help_enabled: if set, --help arguments will be added to the cli-interface. Prints cli_helptext and exit(0), if --help is called by script-user
         """
+        # special case: --help
+        if cli_help_enabled and cls._cli_user_want_help():
+            print(cls.cli_helptext(header=cli_help_header, footer=cli_help_footer), file=sys.stderr)
+            exit(0)
+
+
         # setup cli/env prefix & separator
         prefix = _DEFAULT_CLI_ENV_PREFIX
         separator = _DEFAULT_CLI_ENV_SEPARATOR
@@ -406,7 +435,7 @@ class ConfigModel(BaseModel):
         merged = cls._deep_merge(merged, cls._load_json(json_list))
 
         if load_cli:
-            merged = cls._deep_merge(merged, cls._load_cli_json_style(prefix, separator))
+            merged = cls._deep_merge(merged, cls._load_cli(prefix, separator))
         if load_env:
             merged = cls._deep_merge(merged, cls._load_env(prefix, separator))
 

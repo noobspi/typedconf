@@ -88,7 +88,7 @@ def test_metadata_generation_deep_nesting():
 
     metadata = Root.get_metadata()
     assert any(m.fullname == "m__d__val" for m in metadata)
-    
+
 
 # 2. Loading Sources
 def test_load_payload():
@@ -243,3 +243,33 @@ def test_export_toml_serialization():
     """Verify that the configuration can be exported to TOML."""
     cfg = MainConfig(app_name="Exp")
     assert "app_name" in str(cfg.dumps_toml())
+
+
+# 7. Help Support
+
+
+def test_help_key_help(monkeypatch, capsys):
+    """Verify that --help flag prints help text for fields and exits(0)."""
+    monkeypatch.setattr(sys, "argv", ["script.py", "--help"])
+
+    # Catch the SystemExit triggered by exit(0)
+    with pytest.raises(SystemExit) as e:
+        MainConfig.load(load_env=False, load_cli=False, cli_help_enabled=True)
+    assert e.value.code == 0
+
+    captured = capsys.readouterr()
+    assert "--cfg_app_name" in captured.err
+    assert "--cfg_sub__level" in captured.err
+
+def test_help_key_h(monkeypatch, capsys):
+    """Verify that - flag prints help text for fields and exits(0)."""
+    monkeypatch.setattr(sys, "argv", ["script.py", "-h"])
+
+    # Catch the SystemExit triggered by exit(0)
+    with pytest.raises(SystemExit) as e:
+        MainConfig.load(load_env=False, load_cli=False, cli_help_enabled=True)
+
+    assert e.value.code == 0
+    captured = capsys.readouterr()
+    assert "--cfg_app_name" in captured.err
+    assert "--cfg_sub__level" in captured.err

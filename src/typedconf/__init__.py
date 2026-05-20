@@ -1,17 +1,18 @@
 """
 ## TypedConf
 
-A lightweight, type-safe configuration management library powered by Pydantic v2.
+A lightweight, type-safe configuration management library powered by Pydantic.
 It centralizes application settings by merging data from multiple sources with a
 defined priority (Environment > CLI > JSON > TOML > Defaults).
 
-Key Features:
-- Automatic Merging: Priority-based merging of various config sources.
-- Deep Nesting: Supports nested Pydantic models using `__` as a separator.
-- Type Safety: Full validation of types, including lists and Enums.
-- Optional Dependencies: Enhanced output via `rich`, `.env` support via `python-dotenv`,
-  and TOML exporting via `tomli-w`.
-- Immutability: Config can be optionally 'frozen' (readonly) after loading.
+- **Type-Safe:** Built on Pydantic, ensuring configuration values are validated at runtime.
+- **IDE Support:** Full type-hinting, thanks to pydantic, for seamless development.
+- **Nested Support:** Easily handle complex configuration structures.
+- **TOML and JSON Interface:** Load configuration from toml and/or json files.
+- **CLI and Environment Interface:** Load configuration data from CLI interface (--cfg_myint=1) and/or ENV varables (export CFG_MYINT=1).
+- **Layered Configuration:** Merges configuration data with a clear priority: ENV > CLI > JSON > TOML > Payload > Defaults
+- **Immutability**: Configuration data is readonly (default) after loading.
+- **Self-Documenting:** Generate help text from your configuration/pydantic schema.
 
 ### Usage Example:
 ```
@@ -19,16 +20,15 @@ Key Features:
         db_url: str = "localhost"
         debug: bool = False
 
-    # Load from all sources with default prefix 'TSC_'
     cfg = MyConfig.load(toml_files=["config.toml"])
 
     # Access values
     print(cfg.db_url)
 ```
-### CLI & Env Syntax:
+### CLI and ENV Syntax:
 - ENV: `export CFG_DB_URL="postgres://..."`
-- CLI: `python script.py --cgf_db_url="postgres://..."`
-- Lists (CLI): `--cgf_tags='["a", "b"]'` (Uses JSON-style parsing)
+- CLI: `python script.py --cfg_db_url="postgres://..."`
+- Lists (CLI only): `--cfg_mylist='["a", "b"]'` (Uses JSON-style parsing)
 """
 from .core import ConfigModel, ConfigError, ConfigAttrMetadata
 

@@ -1,6 +1,8 @@
-# TypeSafe-Config
+# TypedConf
 
-**TypeSafe-Config** is a lightweight, type-safe configuration management library for Python. It simplifies centralizing application settings by merging data from multiple sources (toml/json, cli, env) while leveraging the full power of Pydantic v2 for validation and IDE auto-completion.
+A lightweight, type-safe configuration management library powered by Pydantic.
+Following the [12-factor application guide](https://12factor.net/config), it centralizes your application configuration/settings 
+by merging data from multiple sources with a defined priority (Environment > CLI > JSON > TOML > Defaults).
 Heavily inspired by
 [dynaconf](https://www.dynaconf.com/),
 [pydantic](https://pydantic.dev/docs/validation/latest/get-started/) and
@@ -9,10 +11,13 @@ Heavily inspired by
 ## Key Features
 
 - **Type-Safe:** Built on Pydantic, ensuring configuration values are validated at runtime.
-- **Layered Configuration:** Merges settings with a clear priority: ENV > CLI > JSON > TOML > Payload > Defaults
+- **IDE Support:** Full type-hinting, thanks to pydantic, for seamless development.
 - **Nested Support:** Easily handle complex configuration structures.
-- **IDE Support:** Full type-hinting for seamless development.
-- **Self-Documenting:** Automatically generate help text from your configuration-schema.
+- **TOML and JSON Interface:** Load configuration from toml and/or json files.
+- **CLI and ENVironment Interface:** Load configuration data from CLI interface (--cfg_myint=1) and/or ENV varables (export CFG_MYINT=1).
+- **Layered Configuration:** Merges configuration data with a clear priority: ENV > CLI > JSON > TOML > Payload > Defaults
+- **Immutability**: Configuration data is readonly (default) after loading.
+- **Self-Documenting:** Generate help text from your configuration/pydantic schema.
 
 ---
 
@@ -22,7 +27,7 @@ Define your configuration schema by inheriting from `ConfigModel`. Use standard 
 
 ```python
 from pydantic import Field
-from typesaveconfig import ConfigModel
+from typedconf import ConfigModel, ConfigError
 
 class DatabaseConfig(ConfigModel):
     url: str = "sqlite:///default.db"
@@ -37,9 +42,9 @@ class AppConfig(ConfigModel):
 try:
     conf = AppConfig.load(toml_files=['config.toml'])
     print(f"Starting {conf.app_name}...")
-except Exception as e:
+except ConfigError as e:
     # Print helpful CLI documentation if configuration fails
-    AppConfig.print_help(header="Configuration Error. Usage:")
+    print(AppConfig.cli_helptext())
 ```
 
 To provide a complete picture, here is how your configuration files should be structured to work seamlessly with the nested models in your examples.
@@ -89,11 +94,11 @@ url = "db://server:1234/db"
 port = 5432
 ```
 
-This mapping allows **TypeSaveConfig** to automatically map file keys to your Pydantic model fields, ensuring type safety and easy configuration management.
+This mapping allows **TypedConf** to automatically map file keys to your Pydantic model fields, ensuring type safety and easy configuration management.
 
 ## Priority Chain
 
-TypeSaveConfig merges sources in a specific order. Higher-priority sources overwrite lower-priority ones.
+TypedConf merges sources in a specific order. Higher-priority sources overwrite lower-priority ones.
 
 1. **Environment Variables (Highest):** Overrides all other sources (e.g., `CFG_DB__PORT`).
 2. **CLI Arguments:** Passed via command-line (e.g., `--cfg_db__port=9000`).
@@ -106,7 +111,7 @@ TypeSaveConfig merges sources in a specific order. Higher-priority sources overw
 
 ## Environment Variables and CLI Interface
 
-TypeSaveConfig allows runtime overrides without modifying configuration files.
+TypedConf allows runtime overrides without modifying configuration files.
 
 **CLI Usage**
 Arguments use the prefix `cfg_` followed by the field path. Use `__` to traverse nested models.
@@ -138,7 +143,7 @@ CFG_APP_NAME='my-env-app' uv run main.py --cfg_app_name='my-cli-app'  # => my-en
 Export your current configuration instance to JSON or TOML format for debugging or deployment:
 
 ```python
-from typesaveconfig import ExportFormat
+from typedconf import ExportFormat
 
 # Export to TOML string
 print(conf.export_config(ExportFormat.TOML))
