@@ -1,6 +1,6 @@
-"""TypeSaveConfig Demo App"""
+"""TypedConf Demo App"""
 from pydantic import Field, ValidationError
-from typesaveconfig import ConfigModel, ConfigError
+from typedconf import ConfigModel, ConfigError
 
 
 

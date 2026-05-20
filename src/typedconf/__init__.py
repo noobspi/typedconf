@@ -1,5 +1,5 @@
 """
-## TypeSaveConfig
+## TypedConf
 
 A lightweight, type-safe configuration management library powered by Pydantic v2.
 It centralizes application settings by merging data from multiple sources with a

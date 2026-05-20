@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typesaveconfig import ConfigModel, ExportFormat
+from typedconf import ConfigModel
 
 
 

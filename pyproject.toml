@@ -1,5 +1,5 @@
 [project]
-name = "typed-config"
+name = "TypedConf"
 version = "0.1.0"
 description = "A lightweight, type-safe configuration management library for Python"
 readme = "README.md"
@@ -17,4 +17,4 @@ dependencies = [
 max-line-length = 180
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/typesaveconfig"]
+packages = ["src/typedconfig"]

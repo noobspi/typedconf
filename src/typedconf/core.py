@@ -1,5 +1,5 @@
 """
-TypeSaveConfig. A lightweight, type-safe configuration management library powered by Pydantic v2.
+TypedConf. A lightweight, type-safe configuration management library powered by Pydantic v2.
 It centralizes application settings by merging data from multiple sources with a
 defined priority (Environment > CLI > JSON > TOML > Defaults).
 """
@@ -7,14 +7,15 @@ defined priority (Environment > CLI > JSON > TOML > Defaults).
 import json
 import logging
 import os
+import re
 import sys
 import tomllib
-from enum import Enum
 from pathlib import Path
 from typing import Any, Type, TypeVar, Union, get_args, Optional
 from pydantic import BaseModel, ValidationError
 
 
+_DEFAULT_CLI_LONGOPTIONS = '--'
 _DEFAULT_CLI_ENV_PREFIX = 'cfg_'
 _DEFAULT_CLI_ENV_SEPARATOR = '__'
 
@@ -25,8 +26,6 @@ logging.basicConfig(
 )
 
 
-
-
 class _LibWrapper:
     """
     Internal abstraction for optional third-party libraries.
@@ -34,7 +33,7 @@ class _LibWrapper:
     """
     def __init__(self):
         self.tomli_w, self.has_tomliw = self._import("tomli_w")
-        logging.debug("[TypeSaveConfig] Found optional python-package 'tomli-w'")
+        logging.debug("[TypedConf] Found optional python-package 'tomli-w': TOML-Export enabled.")
 
     @staticmethod
     def _import(name: str):
@@ -75,8 +74,8 @@ class ConfigAttrMetadata(BaseModel):
 ConfigModelT = TypeVar('ConfigModelT', bound='ConfigModel')
 class ConfigModel(BaseModel):
     """
-    TypeSaveConfig's core class. Inherit to define your own config-schema.
-    TypeSaveConfig is a lightweight, type-safe configuration management library powered by
+    TypedConf's core class. Inherit to define your own config-schema.
+    TypedConf is a lightweight, type-safe configuration management library powered by
     Pydantic. It provides logic for loading configurations from TOML-, JSON-files, CLI, ENV.
     Plus validating the configuration by pydantic :)
     """
@@ -185,7 +184,7 @@ class ConfigModel(BaseModel):
                 if isinstance(list_item_type, type) and issubclass(list_item_type, BaseModel):
                     cls._set_frozen(list_item_type)
         model.model_rebuild(force=True)
-        logging.debug("[TypeSaveConfig] Applied frozen-state/readonly to '%s'", model.__name__)
+        logging.debug("[TypedConf] Applied frozen-state/readonly to '%s'", model.__name__)
 
 
     @classmethod
@@ -195,15 +194,15 @@ class ConfigModel(BaseModel):
         for toml_file in filenames:
             path = Path(toml_file)
             if not path.exists():
-                logging.warning("[TypeSaveConfig] TOML file not found: %s", path)
+                logging.warning("[TypedConf] TOML file not found: %s", path)
                 continue
             try:
                 with open(path, "rb") as f:
                     new_data = tomllib.load(f)
                     toml_config = cls._deep_merge(toml_config, new_data)
-                    logging.debug("[TypeSaveConfig] TOML read from: %s", path)
+                    logging.debug("[TypedConf] TOML read from: %s", path)
             except tomllib.TOMLDecodeError as e:
-                logging.warning("[TypeSaveConfig] Failed to read & parse TOML %s: %s", path, e)
+                logging.warning("[TypedConf] Failed to read & parse TOML %s: %s", path, e)
         return toml_config
 
 
@@ -214,15 +213,15 @@ class ConfigModel(BaseModel):
         for json_file in filenames:
             path = Path(json_file)
             if not path.exists():
-                logging.warning("[TypeSaveConfig] JSON file not found %s", path)
+                logging.warning("[TypedConf] JSON file not found %s", path)
                 continue
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     new_data = json.load(f)
                     json_config = cls._deep_merge(json_config, new_data)
-                    logging.debug("[TypeSaveConfig] JSON read from %s", path)
+                    logging.debug("[TypedConf] JSON read from %s", path)
             except json.JSONDecodeError as e:
-                logging.warning("[TypeSaveConfig] Failed to read & parse JSON %s: %s", path, e)
+                logging.warning("[TypedConf] Failed to read & parse JSON %s: %s", path, e)
         return json_config
 
     @classmethod
@@ -234,7 +233,7 @@ class ConfigModel(BaseModel):
         found_keys = []
 
         for arg in sys.argv[1:]:
-            if arg.startswith("--") and "=" in arg:
+            if arg.startswith(_DEFAULT_CLI_LONGOPTIONS) and "=" in arg:
                 key_part, val_str = arg.split("=", 1)
                 clean_key = key_part.lstrip("-")
                 if clean_key.startswith(prefix_lower):
@@ -245,12 +244,12 @@ class ConfigModel(BaseModel):
                         except (json.JSONDecodeError, TypeError):
                             parsed_val = val_str
                         cls._add_flat_key_value_to_nested_dict(cli_config, config_path, parsed_val, sep)
-                        found_keys.append(f"--{clean_key}")
+                        found_keys.append(f"{_DEFAULT_CLI_LONGOPTIONS}{clean_key}")
 
         if found_keys:
-            logging.debug("[TypeSaveConfig] CLI read from [%s]", ",".join(found_keys))
+            logging.debug("[TypedConf] CLI read from [%s]", ",".join(found_keys))
         else:
-            logging.debug("[TypeSaveConfig] CLI nothing found (Prefix: --%s)", prefix_lower)
+            logging.debug("[TypedConf] CLI nothing found (Prefix: %s%s)", _DEFAULT_CLI_LONGOPTIONS, prefix_lower)
         return cli_config
 
     @classmethod
@@ -268,42 +267,75 @@ class ConfigModel(BaseModel):
                 found_keys.append(env_name)
 
         if found_keys:
-            logging.debug("[TypeSaveConfig] ENV read from [%s]", ",".join(found_keys))
+            logging.debug("[TypedConf] ENV read from [%s]", ",".join(found_keys))
         else:
-            logging.debug("[TypeSaveConfig] ENV nothing found (Prefix: %s)", prefix_upper)
+            logging.debug("[TypedConf] ENV nothing found (Prefix: %s)", prefix_upper)
         return env_config
 
 
     @classmethod
-    def _validationerror2log(cls, e: ValidationError) -> str:
-        """Format pydantics ValidationError for logging"""
+    def _format_validationerror_(cls, e: ValidationError) -> str:
+        """Format pydantics ValidationError (for logging)"""
         error_messages = []
         for error in e.errors():
-            field_name = '.'.join(map(str, error["loc"]))
+            field_name = str(error["loc"][-1]) # '.'.join(map(str, error["loc"]))   # TODO  db.loglevel anstatt "loglevel"
             model_name = e.title
+            model_classname = 'class'
+            cli_fullname = 'cli'
             constraint_desc = error['msg']
             error_desc = error['type']
-            error_messages.append(f"'{model_name}.{field_name}' {constraint_desc} ({error_desc}).")
+
+            for m in cls.get_metadata(): # get cli-fullname for field from metadata
+                print(m, "\n", model_name, "\n", field_name )
+                if m.model == model_name and m.name == field_name:
+                    model_classname = f"{m.model}.{m.name}"
+                    cli_fullname = f"{_DEFAULT_CLI_LONGOPTIONS}{_DEFAULT_CLI_ENV_PREFIX}{m.fullname}"
+            error_messages.append(f"{cli_fullname} ({model_classname}) {constraint_desc}! {error_desc}.")
 
         validation_input_data = e.errors()[0]['input']
-        error_messages.append(f"Either key is missing, or value is invalid: {validation_input_data}")
+        error_messages.append(f"Key missing or value invalid {validation_input_data}")
         return " ".join(error_messages)
 
 
 
+    @classmethod
+    def _format_validationerror2(cls, e: ValidationError) -> str:
+        """Format pydantics ValidationError (for logging)"""
+        t = str(e).replace('\n', ' ')
+        err_str = re.sub(r'\s+', ' ', t)
+        return err_str
 
+    @classmethod
+    def _format_validationerror(cls, e: ValidationError) -> str:
+        """Format pydantics ValidationError (for logging)"""
+        error_messages = []
+        #error_messages.append("Key missing or value invalid!")
+        metadata_map = {(m.model, m.name): m for m in cls.get_metadata()}
+
+        for error in e.errors():
+            field_name = str(error["loc"][-1]) #'.'.join(map(str, error["loc"]))
+            model_name = str(e.title)
+            m = metadata_map.get((model_name, field_name))
+            #print(m, "\n", model_name, field_name)
+            if m:
+                model_classname = f"{m.model}.{m.name}"
+                cli_fullname = f"{_DEFAULT_CLI_LONGOPTIONS}{_DEFAULT_CLI_ENV_PREFIX}{m.fullname}"
+                error_messages.append(f"{model_classname} ({cli_fullname}): {error['msg']}; {error['type']}.")
+
+        #validation_input_data = e.errors()[0]['input']
+        return ' '.join(error_messages)
 
     ###################### Public API ###########################
 
     @classmethod
     def cli_helptext(cls) -> str:
         """Returns help-text documentation for all available config fields."""
-        prefix = _DEFAULT_CLI_ENV_PREFIX
         hlines = []
-
         for a in cls.get_metadata():
+            cli_fullname = f" {_DEFAULT_CLI_LONGOPTIONS}{_DEFAULT_CLI_ENV_PREFIX}{a.fullname}"
+            model_classname = f"{a.model}.{a.name}"
             if not a.isa_ConfigModel:   # exclude pydantic/COnfigModels from cli-list
-                hl = f" --{prefix}{a.fullname} ({a.model}.{a.name})\n   type={a.type}, default={a.default}"
+                hl = f" {cli_fullname} ({model_classname})\n   type={a.type}, default={a.default}"
                 if a.description:
                     hl += (f"\n   {a.description}")
                 hlines.append(hl)
@@ -388,10 +420,14 @@ class ConfigModel(BaseModel):
             if readonly:
                 cls._set_frozen(cls)
 
-            logging.info("[TypeSaveConfig] '%s' configuration loaded (readonly=%s)", cls.__name__, readonly)
+
+            logging.info("[TypedConf] Configuration '%s' loaded (readonly=%s)", cls.__name__, readonly)
             return instance # type: ignore
         except ValidationError as e:
-            err_msg = cls._validationerror2log(e)
-            err_fields = []
-            logging.warning("[TypeSaveConfig] Data validation failed: %s", err_msg)
-            raise ConfigError(err_msg, err_fields) from e
+            err = e.errors()[0]
+            err_msg = cls._format_validationerror2(e)
+            err_field = str(err["loc"][-1]) #'.'.join(map(str, error["loc"]))
+            _model_name = str(e.title)
+
+            logging.warning("[TypedConf] Loading field '%s' failed! %s", err_field, err_msg)
+            raise ConfigError(err_msg, [err_field,]) from e
