@@ -22,7 +22,7 @@ class AppConfig(ConfigModel):
 
 # MAIN
 try:
-    conf = AppConfig.load(toml_files=['a.toml'], 
+    conf = AppConfig.load(toml_files=['a.toml'],
                           readonly=False,
                           cli_help_enabled=True, cli_help_header="HEADER", cli_help_footer="FOOTER")
     conf.app_name = "XXX"    # RAISES ERROR

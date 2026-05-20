@@ -391,7 +391,7 @@ class ConfigModel(BaseModel):
              payload: Optional[dict[Any, Any]] = None,
              readonly: bool = True,
              cli_prefix: Optional[str | None] = None,
-             #cli_separator: Optional[str | None] = None,
+             cli_separator: Optional[str | None] = None,
              cli_help_enabled: bool = False,
              cli_help_header: Optional[str | None] = None,
              cli_help_footer: Optional[str | None] = None,
@@ -414,24 +414,19 @@ class ConfigModel(BaseModel):
         # special case: --help
         if cli_help_enabled and cls._cli_user_want_help():
             print(cls.cli_helptext(header=cli_help_header, footer=cli_help_footer), file=sys.stderr)
-            exit(0)
+            sys.exit(0)
 
 
         # setup cli/env prefix & separator
-        prefix = _DEFAULT_CLI_ENV_PREFIX
-        separator = _DEFAULT_CLI_ENV_SEPARATOR
-        if cli_prefix is not None:
-            prefix = cli_prefix
-        # if cli_separator is not None:
-        #     separator = cli_separator
+        prefix = _DEFAULT_CLI_ENV_PREFIX if not cli_prefix else cli_prefix
+        separator = _DEFAULT_CLI_ENV_SEPARATOR if not cli_separator else _DEFAULT_CLI_ENV_SEPARATOR #TODO
 
         # load data from sources
         merged: dict[Any, Any] = payload if payload is not None else {}
 
         toml_list = toml_files if toml_files is not None else []
-        json_list = json_files if json_files is not None else []
-
         merged = cls._deep_merge(merged, cls._load_toml(toml_list))
+        json_list = json_files if json_files is not None else []
         merged = cls._deep_merge(merged, cls._load_json(json_list))
 
         if load_cli:

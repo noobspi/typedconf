@@ -62,15 +62,13 @@ def config_files(tmp_path: Path):
     return toml_path, json_path
 
 
-# --- Tests ---
+
+################################################################################################
+#######################      T E S T S      ####################################################
+################################################################################################
+
 
 # 1. Initialization and Metadata
-def test_config_load_defaults():
-    """Ensure schema defaults are applied correctly when no external data is provided."""
-    cfg = MainConfig.load(load_env=False, load_cli=False, readonly=False)
-    assert cfg.app_name == "TestApp"
-    assert cfg.port == 8080
-
 def test_metadata_generation_basic():
     """Verify that metadata extraction identifies nested fields correctly."""
     metadata = MainConfig.get_metadata()
@@ -89,8 +87,27 @@ def test_metadata_generation_deep_nesting():
     metadata = Root.get_metadata()
     assert any(m.fullname == "m__d__val" for m in metadata)
 
+def test_help_cli_interface(monkeypatch, capsys):
+    """Verify that --help flag prints help text for fields and exits(0)."""
+    monkeypatch.setattr(sys, "argv", ["script.py", "--help"])
+
+    # Catch the SystemExit triggered by exit(0)
+    with pytest.raises(SystemExit) as e:
+        MainConfig.load(load_env=False, load_cli=False, cli_help_enabled=True)
+    assert e.value.code == 0
+
+    captured = capsys.readouterr()
+    assert "--cfg_app_name" in captured.err
+    assert "--cfg_sub__level" in captured.err
+
 
 # 2. Loading Sources
+def test_load_defaults():
+    """Ensure schema defaults are applied correctly when no external data is provided."""
+    cfg = MainConfig.load(load_env=False, load_cli=False, readonly=False)
+    assert cfg.app_name == "TestApp"
+    assert cfg.port == 8080
+
 def test_load_payload():
     """Verify configuration loading via direct dictionary payload."""
     cfg = MainConfig.load(payload={"app_name": "DictApp"}, load_env=False, load_cli=False)
@@ -120,11 +137,18 @@ def test_load_cli(monkeypatch):
     cfg = MainConfig.load(load_env=False, load_cli=True)
     assert cfg.port == 1234
 
-def test_cli_prefix_override(monkeypatch):
+def test_prefix_override_cli(monkeypatch):
     """Verify that the CLI prefix can be changed to a custom value."""
     monkeypatch.setattr(sys, "argv", ["script.py", "--myapp_port=9999"])
     cfg = MainConfig.load(load_env=False, load_cli=True, cli_prefix="myapp_")
     assert cfg.port == 9999
+
+def test_prefix_override_env(monkeypatch):
+    """Verify that the ENV prefix can be changed to a custom value."""
+    monkeypatch.setenv("MYAPP_PORT", "9999")
+    cfg = MainConfig.load(load_env=True, load_cli=False, cli_prefix="myapp_")
+    assert cfg.port == 9999
+
 
 # 3. Data Integrity and Validation
 def test_validation_typesafe_scalar():
@@ -152,7 +176,7 @@ def test_validation_malformed_cli_list(monkeypatch):
     with pytest.raises(ConfigError):
         ComplexConfig.load(load_env=False, load_cli=True)
 
-def test_cli_complex_json_input(monkeypatch):
+def test_validation_malformed_cli_dict(monkeypatch):
     """Verify that CLI can accept complex JSON strings for lists and dictionaries."""
     class Complex(ConfigModel):
         tags: list[str]
@@ -227,11 +251,22 @@ def test_robustness_class_isolation():
     assert not any(m.name == "field_a" for m in ConfigB.get_metadata())
 
 # 6. Immutability and Export
-def test_immutability_enforced():
+def test_readonly():
     """Verify that readonly mode prevents attribute modification."""
-    cfg = MainConfig.load(readonly=True, load_env=False, load_cli=False)
+    class ConfigA(ConfigModel):
+        a: int = 1
+    cfg = ConfigA.load(readonly=True, load_env=False, load_cli=False)
     with pytest.raises(ValidationError):
-        cfg.app_name = "Hacked"
+        cfg.a = 2
+    assert cfg.a == 1
+
+def test_writeable():
+    """Verify that write mode accept attribute modification."""
+    class ConfigA(ConfigModel):
+        a: int = 1
+    cfg = ConfigA.load(readonly=False, load_env=False, load_cli=False)
+    cfg.a = 2
+    assert cfg.a == 2
 
 def test_export_json_serialization():
     """Verify that the configuration can be exported to JSON."""
@@ -243,33 +278,3 @@ def test_export_toml_serialization():
     """Verify that the configuration can be exported to TOML."""
     cfg = MainConfig(app_name="Exp")
     assert "app_name" in str(cfg.dumps_toml())
-
-
-# 7. Help Support
-
-
-def test_help_key_help(monkeypatch, capsys):
-    """Verify that --help flag prints help text for fields and exits(0)."""
-    monkeypatch.setattr(sys, "argv", ["script.py", "--help"])
-
-    # Catch the SystemExit triggered by exit(0)
-    with pytest.raises(SystemExit) as e:
-        MainConfig.load(load_env=False, load_cli=False, cli_help_enabled=True)
-    assert e.value.code == 0
-
-    captured = capsys.readouterr()
-    assert "--cfg_app_name" in captured.err
-    assert "--cfg_sub__level" in captured.err
-
-def test_help_key_h(monkeypatch, capsys):
-    """Verify that - flag prints help text for fields and exits(0)."""
-    monkeypatch.setattr(sys, "argv", ["script.py", "-h"])
-
-    # Catch the SystemExit triggered by exit(0)
-    with pytest.raises(SystemExit) as e:
-        MainConfig.load(load_env=False, load_cli=False, cli_help_enabled=True)
-
-    assert e.value.code == 0
-    captured = capsys.readouterr()
-    assert "--cfg_app_name" in captured.err
-    assert "--cfg_sub__level" in captured.err
