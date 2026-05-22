@@ -21,7 +21,7 @@ _DEFAULT_CLI_ENV_SEPARATOR = '__'
 
 # Initialize logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.WARNING,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
@@ -229,14 +229,6 @@ class ConfigModel(BaseModel):
                 logging.warning("[TypedConf] Failed to read & parse JSON %s: %s", path, e)
         return json_config
 
-    @classmethod
-    def _cli_user_want_help(cls) -> bool:
-        """Returns True, when a typical help cli param (--help, -h) is used by the scipt-caller"""
-        cli_help_keys = {'--help', '-h', '-?'}
-        for arg in sys.argv[1:]:
-            if arg in cli_help_keys:
-                return True
-        return False
 
     @classmethod
     def _load_cli(cls, prefix: str, sep: str) -> dict:
@@ -288,31 +280,6 @@ class ConfigModel(BaseModel):
 
 
     @classmethod
-    def _format_validationerror_(cls, e: ValidationError) -> str:
-        """Format pydantics ValidationError (for logging)"""
-        error_messages = []
-        for error in e.errors():
-            field_name = str(error["loc"][-1]) # '.'.join(map(str, error["loc"]))   # TODO  db.loglevel anstatt "loglevel"
-            model_name = e.title
-            model_classname = 'class'
-            cli_fullname = 'cli'
-            constraint_desc = error['msg']
-            error_desc = error['type']
-
-            for m in cls.get_metadata(): # get cli-fullname for field from metadata
-                print(m, "\n", model_name, "\n", field_name )
-                if m.model == model_name and m.name == field_name:
-                    model_classname = f"{m.model}.{m.name}"
-                    cli_fullname = f"{_DEFAULT_CLI_LONGOPTIONS}{_DEFAULT_CLI_ENV_PREFIX}{m.fullname}"
-            error_messages.append(f"{cli_fullname} ({model_classname}) {constraint_desc}! {error_desc}.")
-
-        validation_input_data = e.errors()[0]['input']
-        error_messages.append(f"Key missing or value invalid {validation_input_data}")
-        return " ".join(error_messages)
-
-
-
-    @classmethod
     def _format_validationerror2(cls, e: ValidationError) -> str:
         """Format pydantics ValidationError (for logging)"""
         t = str(e).replace('\n', ' ')
@@ -339,10 +306,21 @@ class ConfigModel(BaseModel):
         #validation_input_data = e.errors()[0]['input']
         return ' '.join(error_messages)
 
+
     ###################### Public API ###########################
 
     @classmethod
-    def cli_helptext(cls, header:str|None=None, footer:str|None=None) -> str:
+    def user_needs_help(cls) -> bool:
+        """Returns True, when a typical help cli param (--help, -h) is used by the user"""
+        cli_help_keys = {'--help', '-h', '-?'}
+        for arg in sys.argv[1:]:
+            if arg in cli_help_keys:
+                return True
+        return False
+
+
+    @classmethod
+    def get_cli_helptext(cls) -> str:
         """Returns help-text documentation for all available config fields."""
         hlines = []
         for a in cls.get_metadata():
@@ -354,12 +332,7 @@ class ConfigModel(BaseModel):
                     hl += (f"\n   {a.description}")
                 hlines.append(hl)
 
-        sep_header_footer = "\n\n"
-        sep_hlines        = "\n\n"
-        r  = f"{header}{sep_header_footer}" if header else ''
-        r += f"Configuration fields:\n{sep_hlines.join(hlines)}" if hlines else ''
-        r += f"{sep_header_footer}{footer}" if footer else ''
-        return r
+        return "\n\n".join(hlines)
 
 
     def dumps_toml(self) -> str|None:
@@ -392,9 +365,6 @@ class ConfigModel(BaseModel):
              readonly: bool = True,
              cli_prefix: Optional[str | None] = None,
              cli_separator: Optional[str | None] = None,
-             cli_help_enabled: bool = False,
-             cli_help_header: Optional[str | None] = None,
-             cli_help_footer: Optional[str | None] = None,
              ) -> ConfigModelT:
         """
         Loads the configuration from various sources.
@@ -411,36 +381,29 @@ class ConfigModel(BaseModel):
             cli_separator: change the default fullname-separator. Default = '__' => NOT YET IMPLEMENTED
             cli_help_enabled: if set, --help arguments will be added to the cli-interface. Prints cli_helptext and exit(0), if --help is called by script-user
         """
-        # special case: --help
-        if cli_help_enabled and cls._cli_user_want_help():
-            print(cls.cli_helptext(header=cli_help_header, footer=cli_help_footer), file=sys.stderr)
-            sys.exit(0)
-
-
-        # setup cli/env prefix & separator
         prefix = _DEFAULT_CLI_ENV_PREFIX if not cli_prefix else cli_prefix
         separator = _DEFAULT_CLI_ENV_SEPARATOR if not cli_separator else _DEFAULT_CLI_ENV_SEPARATOR #TODO
 
-        # load data from sources
+        # load data from spource-code payload
         merged: dict[Any, Any] = payload if payload is not None else {}
 
+        # load from toml
         toml_list = toml_files if toml_files is not None else []
         merged = cls._deep_merge(merged, cls._load_toml(toml_list))
+
+        # load from json
         json_list = json_files if json_files is not None else []
         merged = cls._deep_merge(merged, cls._load_json(json_list))
 
+        # cli- and env-interface
         if load_cli:
             merged = cls._deep_merge(merged, cls._load_cli(prefix, separator))
         if load_env:
             merged = cls._deep_merge(merged, cls._load_env(prefix, separator))
 
+        # init/load/validate pydantic BaseModel with merged data
         try:
             instance = cls.model_validate(merged)
-            # if readonly:
-            #     class FrozenModel(cls):
-            #         """Readonly Version"""
-            #         model_config = {**cls.model_config, "frozen": True}
-            #     instance = FrozenModel.model_validate(merged)
             if readonly:
                 cls._set_frozen(cls)
 

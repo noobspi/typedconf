@@ -20,13 +20,15 @@ class AppConfig(ConfigModel):
     db: DbConfig = Field(default_factory=DbConfig, description="database configuration")
 
 
+
 # MAIN
+if AppConfig.user_needs_help():
+    print("MYAPP\n", AppConfig.get_cli_helptext())
+    exit(0)
+
 try:
-    conf = AppConfig.load(toml_files=['a.toml'],
-                          readonly=False,
-                          cli_help_enabled=True, cli_help_header="HEADER", cli_help_footer="FOOTER")
+    conf = AppConfig.load(toml_files=['a.toml'], readonly=False)
     conf.app_name = "XXX"    # RAISES ERROR
     print(conf.dumps_json() )
-    
 except (ConfigError, ValidationError) as e:
-    print(AppConfig.cli_helptext(header='MYAPP', footer='END'))
+    print(e)

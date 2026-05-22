@@ -87,18 +87,26 @@ def test_metadata_generation_deep_nesting():
     metadata = Root.get_metadata()
     assert any(m.fullname == "m__d__val" for m in metadata)
 
-def test_help_cli_interface(monkeypatch, capsys):
-    """Verify that --help flag prints help text for fields and exits(0)."""
+def test_help_cli_argument(monkeypatch):
+    """Verify that --help flag."""
     monkeypatch.setattr(sys, "argv", ["script.py", "--help"])
+    assert MainConfig.user_needs_help() is True
 
-    # Catch the SystemExit triggered by exit(0)
-    with pytest.raises(SystemExit) as e:
-        MainConfig.load(load_env=False, load_cli=False, cli_help_enabled=True)
-    assert e.value.code == 0
+def test_help_cli_helptext():
+    """Verify help text contains all nested fields"""
+    class Deep(ConfigModel):
+        val: int = 1
+    class Mid(ConfigModel):
+        val: int = 2
+        d: Deep = Field(default_factory=Deep)
+    class Root(ConfigModel):
+        val: int = 3
+        m: Mid = Field(default_factory=Mid)
 
-    captured = capsys.readouterr()
-    assert "--cfg_app_name" in captured.err
-    assert "--cfg_sub__level" in captured.err
+    assert "--cfg_val" in Root.get_cli_helptext()
+    assert "--cfg_m__val" in Root.get_cli_helptext()
+    assert "--cfg_m__d__val" in Root.get_cli_helptext()
+
 
 
 # 2. Loading Sources
