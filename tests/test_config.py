@@ -95,18 +95,19 @@ def test_help_cli_argument(monkeypatch):
 def test_help_cli_helptext():
     """Verify help text contains all nested fields"""
     class Deep(ConfigModel):
-        val: int = 1
+        val: int = Field(1, description="Example Description")
     class Mid(ConfigModel):
-        val: int = 2
-        d: Deep = Field(default_factory=Deep)
+        val: int = Field(2, description="Useful Help")
+        d: Deep = Field(default_factory=Deep) # type: ignore
     class Root(ConfigModel):
         val: int = 3
-        m: Mid = Field(default_factory=Mid)
+        m: Mid = Field(default_factory=Mid) # type: ignore
 
     assert "--cfg_val" in Root.get_cli_helptext()
     assert "--cfg_m__val" in Root.get_cli_helptext()
     assert "--cfg_m__d__val" in Root.get_cli_helptext()
-
+    assert "Example Description" in Root.get_cli_helptext()
+    assert "Useful Help" in Root.get_cli_helptext()
 
 
 # 2. Loading Sources

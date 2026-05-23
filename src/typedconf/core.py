@@ -12,7 +12,7 @@ import sys
 import tomllib
 from pathlib import Path
 from typing import Any, Type, TypeVar, Union, get_args, Optional
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, computed_field
 
 
 _DEFAULT_CLI_LONGOPTIONS = '--'
@@ -74,6 +74,20 @@ class ConfigAttrMetadata(BaseModel):
     isa_ConfigModel: bool = False
     description: str = ''
     default: Any = None
+
+    @computed_field
+    @property
+    def default_cli_key(self) -> str:
+        """computed field: default cli key for --key=val)"""
+        k = f"{_DEFAULT_CLI_LONGOPTIONS}{_DEFAULT_CLI_ENV_PREFIX}{self.fullname}"
+        return k.lower()
+
+    @computed_field
+    @property
+    def default_env_key(self) -> str:
+        """computed field: default env key for KEY=VAL"""
+        k = f"{_DEFAULT_CLI_ENV_PREFIX}{self.fullname}"
+        return k.upper()
 
 
 ConfigModelT = TypeVar('ConfigModelT', bound='ConfigModel')
@@ -324,12 +338,13 @@ class ConfigModel(BaseModel):
         """Returns help-text documentation for all available config fields."""
         hlines = []
         for a in cls.get_metadata():
-            cli_fullname = f" {_DEFAULT_CLI_LONGOPTIONS}{_DEFAULT_CLI_ENV_PREFIX}{a.fullname}"
-            model_classname = f"{a.model}.{a.name}"
-            if not a.isa_ConfigModel:   # exclude pydantic/COnfigModels from cli-list
-                hl = f" {cli_fullname} ({model_classname})\n   type={a.type}, default={a.default}"
+            cli_argument = f"{_DEFAULT_CLI_LONGOPTIONS}{_DEFAULT_CLI_ENV_PREFIX}{a.fullname}"
+            model_fieldname = f"{a.model}.{a.name}"
+            if not a.isa_ConfigModel:   # exclude pydantic/ConfigModels from cli-list
+                hl  = f"{cli_argument} ({model_fieldname})\n"
+                hl += f"  type={a.type}, default={a.default}"
                 if a.description:
-                    hl += (f"\n   {a.description}")
+                    hl += (f"\n  {a.description}")
                 hlines.append(hl)
 
         return "\n\n".join(hlines)
