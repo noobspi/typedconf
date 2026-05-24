@@ -28,7 +28,7 @@ defined priority (Environment > CLI > JSON > TOML > Defaults).
 ### CLI and ENV Syntax:
 - ENV: `export CFG_DB_URL="postgres://..."`
 - CLI: `python script.py --cfg_db_url="postgres://..."`
-- Lists (CLI only): `--cfg_mylist='["a", "b"]'` (Uses JSON-style parsing)
+- Lists and dicts (CLI only): `--cfg_mylist='["a", "b"]'` (Uses JSON-style parsing)
 """
 from .core import ConfigModel, ConfigAttrMetadata, ConfigError, UserNeedsHelp
 

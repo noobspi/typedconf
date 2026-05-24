@@ -269,14 +269,27 @@ def test_readonly():
         cfg.a = 2
     assert cfg.a == 1
 
-# @pytest.mark.skip(reason="rejected feature 'writeable' configuration ")
-# def test_writeable():
-#     """Verify that write mode accept attribute modification."""
-#     class ConfigA(ConfigModel):
-#         a: int = 1
-#     cfg = ConfigA.load(readonly=False, load_env=False, load_cli=False)
-#     cfg.a = 2
-#     assert cfg.a == 2
+def test_writeable():
+    """Verify that 'write mode' accepts field modification."""
+    class Deep(ConfigModel):
+        model_config = {'frozen': False}
+        val: int = Field(1, description="Example Description")
+    class Mid(ConfigModel):
+        model_config = {'frozen': False}
+        val: int = Field(2, description="Useful Help")
+        d: Deep = Field(default_factory=Deep) # type: ignore
+    class Root(ConfigModel):
+        model_config = {'frozen': False}
+        val: int = 3
+        m: Mid = Field(default_factory=Mid) # type: ignore
+
+    cfg = Root.load(load_env=False, load_cli=False)
+    cfg.val = 90
+    assert cfg.val == 90
+    cfg.m.val = 91
+    assert cfg.m.val == 91
+    cfg.m.d.val = 92
+    assert cfg.m.d.val == 92
 
 def test_export_json_serialization():
     """Verify that the configuration can be exported to JSON."""

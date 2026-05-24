@@ -7,6 +7,7 @@ RFC3986_URI_REGEX = r'^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,
 
 # define configuration-schema
 class DbConfig(ConfigModel):
+    #model_config = {'frozen': False}
     """Config-Schema - Database Category"""
     enabled: bool = True
     con:str = Field("db://myserver.com:1234/mydatabase", pattern=RFC3986_URI_REGEX)
@@ -15,6 +16,7 @@ class DbConfig(ConfigModel):
     loglevel: int = Field(..., description="database log-level: 0=no logging, 1=errors, 2=info")
 
 class AppConfig(ConfigModel):
+    #model_config = {'frozen': False}
     """Main Configuration Schema"""
     app_name: str
     tags: list[str] = Field(['tag-1', 'tag-2'], description="The tag list")
@@ -35,12 +37,12 @@ try:
         cli_prefix='pre_',
         cli_help_enabled=True,
     )
-    print("config loaded:\n", conf.dumps_json(), "\n=====================\n")
 
     #TODO: Re-Think "writeable": Do the user need a writeable config?!
     # conf.app_name = "raise readonly-error app"  # ok
     # conf.db.user  = "raise readonly-error user" # not ok. nested model-config for RwConfigModel only works for root-model/instance. not for the nested ones!
 
+    print("config loaded:\n", conf.dumps_json(), "\n=====================\n")
 
 except (ConfigError, ValidationError) as e:
     print(e)

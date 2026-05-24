@@ -238,6 +238,65 @@ Available CLI Parameter
    application listen on port. Between 1000 and 9999, defaullt=8080
 ```
 
+### Writeable Configuration
+
+Set pydantic's `frozen` to False, if you need a *writeable configuration*.
+
+```python
+from pydantic import Field
+from typedconf import ConfigModel, ConfigError
+
+# define configuration schema
+class DatabaseConfig(ConfigModel):
+    model_config = {'frozen': False}    # writeable BaseModel
+
+    con: str = Field(..., description="DB connection-string, required field.")
+    user: str = Field(..., description="DB username, required field.")
+    pwd: str = Field(..., description="DB password, required field.")
+
+class AppConfig(ConfigModel):
+    model_config = {'frozen': False}    # writeable BaseModel
+
+    app_name: str = Field(..., description="application name, required field.")
+    port: int = Field(8080, ge=1000, le=9999, description="application listen on port. Between 1000 and 9999, defaullt=8080")
+    db: DatabaseConfig = Field(default_factory=DatabaseConfig, description="database configuration")
+
+# Load configuration
+try:
+    conf = AppConfig.load(toml_files=['config.toml'])
+    print(f"Running {conf.app_name} on port {conf.port}. DB connected {conf.db.user} @ {conf.db.con}")
+except ConfigError as e:
+    print(e)
+
+# write configuration (hint: this is instance-memory only!)
+    conf.port = 6789
+```
+
+Note: ConfigModel sets the pydantic model_config to:
+
+- Set BsaeModel to readonly
+- Raise error, when loading unknown extra data
+- Validate default values when loading
+- validate when assigning a new value to a writeable BaseModel
+
+```python
+model_config = {
+    "frozen": True,
+    "extra": "forbid",
+    "validate_default": True,
+    "validate_assignment": True,
+}
+```
+
+
+
+
+
+
+
+
+
+
 AAAAAAAAAAAAAAAA
 
 # TypedConf v2
