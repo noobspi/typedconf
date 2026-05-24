@@ -113,7 +113,7 @@ def test_help_cli_helptext():
 # 2. Loading Sources
 def test_load_defaults():
     """Ensure schema defaults are applied correctly when no external data is provided."""
-    cfg = MainConfig.load(load_env=False, load_cli=False, readonly=False)
+    cfg = MainConfig.load(load_env=False, load_cli=False)
     assert cfg.app_name == "TestApp"
     assert cfg.port == 8080
 
@@ -264,18 +264,19 @@ def test_readonly():
     """Verify that readonly mode prevents attribute modification."""
     class ConfigA(ConfigModel):
         a: int = 1
-    cfg = ConfigA.load(readonly=True, load_env=False, load_cli=False)
+    cfg = ConfigA.load(load_env=False, load_cli=False)
     with pytest.raises(ValidationError):
         cfg.a = 2
     assert cfg.a == 1
 
-def test_writeable():
-    """Verify that write mode accept attribute modification."""
-    class ConfigA(ConfigModel):
-        a: int = 1
-    cfg = ConfigA.load(readonly=False, load_env=False, load_cli=False)
-    cfg.a = 2
-    assert cfg.a == 2
+# @pytest.mark.skip(reason="rejected feature 'writeable' configuration ")
+# def test_writeable():
+#     """Verify that write mode accept attribute modification."""
+#     class ConfigA(ConfigModel):
+#         a: int = 1
+#     cfg = ConfigA.load(readonly=False, load_env=False, load_cli=False)
+#     cfg.a = 2
+#     assert cfg.a == 2
 
 def test_export_json_serialization():
     """Verify that the configuration can be exported to JSON."""

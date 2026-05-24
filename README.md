@@ -82,7 +82,7 @@ class DatabaseConfig(ConfigModel):
 
 class AppConfig(ConfigModel):
     app_name: str = Field(..., description="application name, required field.")
-    port: int = Field(8080, gt=1000, lt=9999, description="application listen on port. Between 1000 and 9999, defaullt=8080")
+    port: int = Field(8080, ge=1000, le=9999, description="application listen on port. Between 1000 and 9999, defaullt=8080")
     db: DatabaseConfig = Field(default_factory=DatabaseConfig, description="database configuration")
 
 # Load configuration
@@ -186,9 +186,11 @@ TypedConf can include a `--help` argument to your application and generates a ni
 from pydantic import Field
 from typedconf import ConfigModel, ConfigError
 
+RFC3986_URI_REGEX = r'^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})(?::\d+)?([\/\w \.-]*)*\/?$'
+
 # define configuration schema
 class DatabaseConfig(ConfigModel):
-    con: str = Field(..., description="DB connection-string, required field.")
+    con: str = Field(..., pattern=RFC3986_URI_REGEX, description="DB connection-string, required field.")
     user: str = Field(..., description="DB username, required field.")
     pwd: str = Field(..., description="DB password, required field.")
 

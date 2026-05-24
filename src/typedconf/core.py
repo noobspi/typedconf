@@ -21,7 +21,7 @@ _DEFAULT_CLI_ENV_SEPARATOR = '__'
 
 # Initialize logging
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
@@ -53,19 +53,28 @@ _libs = _LibWrapper()
 
 class ConfigError(Exception):
     """
-        Raised when configuration validation fails. Either data for the field(s) is missing, 
-        or data (from toml|json|cli|env|source) is invalid. fields[] is a list of fieldnames 
-        containing a pydantic validation-error. 
-        TODO: currently get from pydantic only(!) the very 1st validation-error while loading data.
-        Therefore fields has alwyas only 1 item.
+    Raised when configuration validation fails. Either data for the field(s) is missing, 
+    or data (from toml|json|cli|env|source) is invalid. fields[] is a list of fieldnames 
+    containing a pydantic validation-error. 
+    TODO: currently get from pydantic only(!) the very 1st validation-error while loading data.
+    Therefore fields has alwyas only 1 item.
     """
     def __init__(self, message: str, fields: list[str]):
         self.fields = fields
         super().__init__(message)
 
+class UserNeedsHelp(Exception):
+    """
+    Raised, when the (a) shell-user (caller aof the script/application) added `--help` to the cli AND (b) `cli_enable_help=True` on load(9)
+    str(e) = get_cli_helptext, including the correct `cli-prefix`
+    """
+    def __init__(self, helptext: str):
+        super().__init__(helptext)
+
 
 class ConfigAttrMetadata(BaseModel):
-    """Holds metadata about a config field for help-text and documentation generation."""
+    """Holds metadata about a config field for help-text and documentation generation.
+    TODO: computed fields don't and can't respect the prefix in classmethod load()?!"""
     model: str
     name: str
     fullname: str
@@ -100,19 +109,17 @@ class ConfigModel(BaseModel):
     """
 
     model_config = {
-        "frozen": False,  # Wird später durch _set_frozen auf True gesetzt
-        "extra": "forbid", # Hilft Fehler bei Tippfehlern zu sammeln
+        "frozen": True,              # configuration is readonly
+        "extra": "forbid",           # raise error, when loading unknown extra data
+        "validate_default": True,    # validate default values foreach field
+        "validate_assignment": True, # validate when assigning a new value
     }
-
-    _cli_prefix:str = 'cfg_'
-    _field_separator:str = '__'
-
 
 
     @classmethod
     def _get_attr_metadata(cls, model: Type[BaseModel], _path: str = "") -> list[ConfigAttrMetadata]:
         """Returns flat list of all attributes (ConfigAttrMetadata)"""
-        field_separator = "__"
+        field_separator = _DEFAULT_CLI_ENV_SEPARATOR
         f = []
         for name, info in sorted(model.model_fields.items()):
             f_fullname = f"{_path}{field_separator}{name}" if _path else name
@@ -334,11 +341,12 @@ class ConfigModel(BaseModel):
 
 
     @classmethod
-    def get_cli_helptext(cls) -> str:
-        """Returns help-text documentation for all available config fields."""
+    def get_cli_helptext(cls, prefix:str|None = None) -> str:
+        """Returns help-text documentation for all available config fields. Respects cli-prefix (or uses the default)"""
+        prefix = _DEFAULT_CLI_ENV_PREFIX if not prefix else prefix
         hlines = []
         for a in cls.get_metadata():
-            cli_argument = f"{_DEFAULT_CLI_LONGOPTIONS}{_DEFAULT_CLI_ENV_PREFIX}{a.fullname}"
+            cli_argument = f"{_DEFAULT_CLI_LONGOPTIONS}{prefix}{a.fullname}"
             model_fieldname = f"{a.model}.{a.name}"
             if not a.isa_ConfigModel:   # exclude pydantic/ConfigModels from cli-list
                 hl  = f"{cli_argument} ({model_fieldname})\n"
@@ -377,27 +385,36 @@ class ConfigModel(BaseModel):
              load_env: bool = True,
              load_cli: bool = True,
              payload: Optional[dict[Any, Any]] = None,
-             readonly: bool = True,
              cli_prefix: Optional[str | None] = None,
              cli_separator: Optional[str | None] = None,
+             cli_help_enabled: bool = False,
+             #readonly: bool = True, #TODO: Re-Think a writeable configuration for the user...
              ) -> ConfigModelT:
         """
         Loads the configuration from various sources.
-        Raises ConfigError, if configuration validation fails.
-        Merge order ENV > CLI > JSON > TOML > Payload > Defaults (ENV has highest priority)
+        Merge data in this order: ENV > CLI > JSON > TOML > Payload > Defaults (ENV has highest priority).
+
+        Raises:
+            `ConfigError`, if configuration validation fails.
+            `UserNeedsHelp`, if cli_help_enabled==True and adds `--help` to the cli/shell
+        
         Args:
             toml_files: List of TOML file paths to load (field from last file in list wins).
             json_files: List of JSON file paths to load (field from last file in list wins).
-            load_env: Whether to load from Environment Variables.
-            load_cli: Whether to load from CLI arguments.
+            load_env: Whether to load from Environment Variables. Default = True
+            load_cli: Whether to load from CLI arguments. Default = True
             payload: Initial dictionary of values (lowest priority).
-            readonly: If True, the resulting config object is immutable.
             cli_prefix: change the default prefix for CLI and ENV interface. Default = 'cfg_'
             cli_separator: change the default fullname-separator. Default = '__' => NOT YET IMPLEMENTED
-            cli_help_enabled: if set, --help arguments will be added to the cli-interface. Prints cli_helptext and exit(0), if --help is called by script-user
+            cli_help_enabled: if set, --help arguments will be added to the cli-interface. Raises UserNeedsHelp if, --help; exception message = cli_helptext(prefix)
+            readonly: If True, the resulting config object is immutable. Default = True
         """
         prefix = _DEFAULT_CLI_ENV_PREFIX if not cli_prefix else cli_prefix
         separator = _DEFAULT_CLI_ENV_SEPARATOR if not cli_separator else _DEFAULT_CLI_ENV_SEPARATOR #TODO
+
+        if cli_help_enabled:
+            if cls.user_needs_help():
+                raise UserNeedsHelp(cls.get_cli_helptext(prefix))
 
         # load data from spource-code payload
         merged: dict[Any, Any] = payload if payload is not None else {}
@@ -410,7 +427,7 @@ class ConfigModel(BaseModel):
         json_list = json_files if json_files is not None else []
         merged = cls._deep_merge(merged, cls._load_json(json_list))
 
-        # cli- and env-interface
+        # load from cli- and env-interface
         if load_cli:
             merged = cls._deep_merge(merged, cls._load_cli(prefix, separator))
         if load_env:
@@ -419,11 +436,15 @@ class ConfigModel(BaseModel):
         # init/load/validate pydantic BaseModel with merged data
         try:
             instance = cls.model_validate(merged)
-            if readonly:
-                cls._set_frozen(cls)
+            # if not readonly:
+            #     class RWConfigModel(cls):
+            #         """A writeable ConfigModel"""
+            #         model_config={'frozen':False}
+            #     RWConfigModel.__name__ = f"Rw{cls.__name__}"
+            #     RWConfigModel.__qualname__ = f"Rw{cls.__qualname__}"
+            #     instance = RWConfigModel.model_validate(merged)
 
-
-            logging.info("[TypedConf] Configuration '%s' loaded (readonly=%s)", cls.__name__, readonly)
+            logging.info("[TypedConf] Configuration '%s' loaded (readonly)", cls.__name__)
             return instance # type: ignore
         except ValidationError as e:
             err = e.errors()[0]

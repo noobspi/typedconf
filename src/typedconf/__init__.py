@@ -30,12 +30,13 @@ defined priority (Environment > CLI > JSON > TOML > Defaults).
 - CLI: `python script.py --cfg_db_url="postgres://..."`
 - Lists (CLI only): `--cfg_mylist='["a", "b"]'` (Uses JSON-style parsing)
 """
-from .core import ConfigModel, ConfigError, ConfigAttrMetadata
+from .core import ConfigModel, ConfigAttrMetadata, ConfigError, UserNeedsHelp
 
 __all__ = [
     "ConfigModel",
     "ConfigError",
     "ConfigAttrMetadata",
+    "UserNeedsHelp"
 ]
 
 __version__ = "0.1.0"
