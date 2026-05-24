@@ -436,14 +436,6 @@ class ConfigModel(BaseModel):
         # init/load/validate pydantic BaseModel with merged data
         try:
             instance = cls.model_validate(merged)
-            # if not readonly:
-            #     class RWConfigModel(cls):
-            #         """A writeable ConfigModel"""
-            #         model_config={'frozen':False}
-            #     RWConfigModel.__name__ = f"Rw{cls.__name__}"
-            #     RWConfigModel.__qualname__ = f"Rw{cls.__qualname__}"
-            #     instance = RWConfigModel.model_validate(merged)
-
             logging.info("[TypedConf] Configuration '%s' loaded (readonly)", cls.__name__)
             return instance # type: ignore
         except ValidationError as e:

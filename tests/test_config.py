@@ -273,10 +273,10 @@ def test_writeable():
     """Verify that 'write mode' accepts field modification."""
     class Deep(ConfigModel):
         model_config = {'frozen': False}
-        val: int = Field(1, description="Example Description")
+        val: int = 1
     class Mid(ConfigModel):
         model_config = {'frozen': False}
-        val: int = Field(2, description="Useful Help")
+        val: int = 2
         d: Deep = Field(default_factory=Deep) # type: ignore
     class Root(ConfigModel):
         model_config = {'frozen': False}
@@ -290,6 +290,20 @@ def test_writeable():
     assert cfg.m.val == 91
     cfg.m.d.val = 92
     assert cfg.m.d.val == 92
+
+def test_writeable_validate_assigning():
+    """Verify that 'write mode' accepts field modification."""
+    class Root(ConfigModel):
+        model_config = {'frozen': False}
+        val: int = Field(10, ge=1, le=100)
+
+    cfg = Root.load(load_env=False, load_cli=False)
+    cfg.val = 90
+    assert cfg.val == 90
+    with pytest.raises(ValidationError):
+        cfg.val = 999
+    assert cfg.val == 90
+
 
 def test_export_json_serialization():
     """Verify that the configuration can be exported to JSON."""
